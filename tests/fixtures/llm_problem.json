@@ -1,0 +1,37 @@
+{
+  "public": {
+    "problem_id": "p_fixture",
+    "title": "중학생 영어 에세이 첨삭 도우미",
+    "domain": "학원·교육",
+    "archetype": "text_feedback_tool",
+    "difficulty": "easy",
+    "readme_markdown": "# 중학생 영어 에세이 첨삭 도우미\n\n## 상황\n동네 영어학원에서는 매주 중학생들이 짧은 영어 에세이를 제출합니다. 강사 두 명이 학생 60명의 글을 첨삭하느라 피드백이 늦어지고 있습니다.\n\n## 현업의 요청\n> \"학생들이 글을 내면 바로 피드백을 받을 수 있으면 좋겠어요. 제가 첨삭할 때 보는 기준도 담고 싶어요.\"\n\n## 현업 파트너\n박소연 원장은 개발자가 아닙니다. 범위를 정해 합의하는 것도 과제의 일부입니다.\n\n## 과제\n에세이 피드백 웹서비스를 만드세요. 구현 방식은 응시자 판단에 맡깁니다.\n\n## 실행 환경\nOpenAI API는 OPENAI_API_KEY, OPENAI_BASE_URL 환경변수로 제공됩니다.\n",
+    "data_files": [{"path": "data/guide.txt", "content": "에세이 분량: 300단어 이상\n평가 영역: 내용, 구성, 문법, 어휘\n"}],
+    "persona_public": {"name": "박소연", "role": "영어학원 원장", "intro": "안녕하세요, 박소연입니다. 학생 첨삭 관련해서 궁금한 거 있으시면 물어봐 주세요."}
+  },
+  "sealed": {
+    "persona_private": {
+      "speaking_style": "친절하지만 바빠서 짧게 말함, 학원 현장 용어 사용",
+      "answerable_topics": ["첨삭 기준", "학생 특성", "피드백 전달 방식", "학원 운영 일정", "학생 정보 관리"],
+      "background": "15년차 영어 강사 출신 원장. 중학생 에세이 첨삭을 직접 해 왔다."
+    },
+    "facts": [
+      {"id": "F01", "statement": "첨삭할 때는 문법보다 주장과 근거가 연결되는지를 가장 먼저 본다.", "type": "ask_to_reveal", "importance": "critical",
+       "reveal_when": "첨삭 기준이나 에세이를 볼 때 무엇을 먼저 보는지 물을 때", "example_question": "원장님은 학생 에세이를 받으면 가장 먼저 어떤 걸 보세요?"},
+      {"id": "F02", "statement": "한 번의 피드백에서 고칠 점은 최대 두 개까지만 알려준다.", "type": "ask_to_reveal", "importance": "critical",
+       "reveal_when": "고칠 점을 몇 개 알려주는지, 피드백 분량을 물을 때", "example_question": "학생한테 고칠 점은 한 번에 몇 개 정도 알려주세요?"},
+      {"id": "F03", "statement": "에세이 분량 기준은 150~200단어이며, 자료의 300단어는 작년 고등부 기준이다.", "type": "conflict", "importance": "major",
+       "reveal_when": "분량 기준을 묻거나 300단어 기준을 확인할 때", "example_question": "자료에는 300단어 이상이라고 되어 있는데 지금도 그 기준인가요?"},
+      {"id": "F04", "statement": "학생 이름과 학교명은 외부 AI 서비스로 보내면 안 된다.", "type": "constraint", "importance": "major",
+       "reveal_when": "학생 정보, 개인정보, 외부 전송에 대해 물을 때", "example_question": "학생 에세이를 AI로 분석할 때 이름이나 학교 같은 정보도 같이 보내도 될까요?"},
+      {"id": "F05", "statement": "지난 학기 빨간색 표시에 학생이 위축된 일이 있어 지적은 파란색으로 표시한다.", "type": "detail", "importance": "minor",
+       "reveal_when": "최근 첨삭 사례나 학생 반응을 물을 때", "example_question": "최근에 첨삭을 돌려줬을 때 학생 반응이 기억에 남는 일이 있었나요?"},
+      {"id": "F06", "statement": "네 평가 영역 중 어휘의 비중이 가장 낮다.", "type": "confirm_only", "importance": "minor",
+       "reveal_when": "응시자가 평가 영역 비중에 대한 해석을 제시할 때", "example_question": "네 영역 중 어휘는 비중이 제일 낮은 거죠?"}
+    ],
+    "priority_confusion": ["F01과 F02 중 무엇을 서비스에서 먼저 보여줄지 원장 스스로 헷갈려 함"],
+    "good_solution_criteria": ["주장-근거 연결을 먼저 평가", "고칠 점 2개 이하"],
+    "overengineering_traps": ["학생 로그인/계정", "강사용 대시보드"],
+    "data_file_notes": "data/guide.txt의 300단어는 옛 기준"
+  }
+}

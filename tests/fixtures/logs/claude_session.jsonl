@@ -1,0 +1,9 @@
+{"type":"permission-mode","permissionMode":"auto","sessionId":"abc"}
+{"type":"user","message":{"role":"user","content":"README 읽고 계획 세워줘"},"uuid":"1","timestamp":"2026-10-24T13:00:00.000Z","cwd":"__WS__","sessionId":"abc"}
+{"type":"assistant","message":{"id":"msg_1","role":"assistant","content":[{"type":"thinking","thinking":"..."}],"usage":{"input_tokens":2,"cache_creation_input_tokens":1000,"cache_read_input_tokens":5000,"output_tokens":100}},"timestamp":"2026-10-24T13:00:02.000Z","cwd":"__WS__"}
+{"type":"assistant","message":{"id":"msg_1","role":"assistant","content":[{"type":"tool_use","id":"toolu_1","name":"Write","input":{"file_path":"__WS__/PLAN.md","content":"x"}}],"usage":{"input_tokens":2,"cache_creation_input_tokens":1000,"cache_read_input_tokens":5000,"output_tokens":100}},"timestamp":"2026-10-24T13:00:03.000Z","cwd":"__WS__"}
+{"type":"user","message":{"role":"user","content":[{"tool_use_id":"toolu_1","type":"tool_result","content":"ok"}]},"timestamp":"2026-10-24T13:00:04.000Z","cwd":"__WS__"}
+{"type":"user","message":{"role":"user","content":"[Image: original 10x10]"},"isMeta":true,"timestamp":"2026-10-24T13:00:05.000Z","cwd":"__WS__"}
+{"type":"assistant","message":{"id":"msg_2","role":"assistant","content":[{"type":"tool_use","id":"toolu_2","name":"Bash","input":{"command":"ls"}}],"usage":{"input_tokens":3,"cache_creation_input_tokens":0,"cache_read_input_tokens":6000,"output_tokens":50}},"timestamp":"2026-10-24T13:00:06.000Z","cwd":"__WS__"}
+{"type":"user","message":{"role":"user","content":[{"type":"text","text":"[Request interrupted by user]"}]},"timestamp":"2026-10-24T13:00:07.000Z","cwd":"__WS__"}
+{"type":"user","message":{"role":"user","content":"테스트도 돌려줘"},"timestamp":"2026-10-24T13:01:00.000Z","cwd":"__WS__/sub","sessionId":"abc"}

@@ -1,0 +1,239 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<title>mockdrill — AI 실무 과제 모의고사</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="topbar">
+  <strong>mockdrill</strong>
+  <span id="top-title" class="muted">AI 실무 과제 모의고사</span>
+  <span class="spacer"></span>
+  <span id="top-qcount" class="hidden"></span>
+  <span id="top-timer" class="timer hidden"></span>
+  <button id="btn-pause" class="hidden">일시정지</button>
+  <button id="btn-submit-open" class="primary hidden">제출하고 리허설 시작</button>
+  <button id="btn-settings" class="ghost">설정</button>
+</header>
+<div id="toasts"></div>
+<main>
+  <section id="home" class="view narrow">
+    <h1>모의고사</h1>
+    <div class="cards">
+      <button id="btn-new" class="card primary">새 모의고사<small>과제 출제 → 응시 → 리허설 → 리포트</small></button>
+      <button id="btn-standalone" class="card">설명 리허설만 하기<small>임의의 로컬 저장소로 이해도 확인 문제</small></button>
+      <button id="btn-dashboard" class="card">기록 대시보드<small>지난 세션 점수 추이와 자주 놓치는 사실 유형</small></button>
+    </div>
+    <h2>세션</h2>
+    <table class="list"><thead><tr><th>세션</th><th>제목</th><th>도메인</th><th>난이도</th><th>상태</th><th></th></tr></thead><tbody id="session-rows"></tbody></table>
+    <h2>단독 리허설</h2>
+    <table class="list"><thead><tr><th>ID</th><th>저장소</th><th>상태</th><th>점수</th><th></th></tr></thead><tbody id="rehearsal-rows"></tbody></table>
+  </section>
+
+  <section id="dashboard" class="view wide hidden">
+    <h1>기록 대시보드</h1>
+    <section class="axis">
+      <h2>축별 점수 추이</h2>
+      <div id="dash-chart"></div>
+    </section>
+    <section class="axis">
+      <h2>세션 목록</h2>
+      <table class="grid" id="dash-sessions"></table>
+    </section>
+    <section class="axis">
+      <h2>사실 유형별 발견률</h2>
+      <p id="dash-types-note" class="muted"></p>
+      <table class="grid" id="dash-types"></table>
+      <div id="dash-tips"></div>
+    </section>
+    <div class="row"><button class="ghost" data-go="home">홈으로</button></div>
+  </section>
+
+  <section id="standalone" class="view narrow hidden">
+    <h1>설명 리허설만 하기</h1>
+    <form id="form-standalone">
+      <label>저장소 경로 <input name="repo_path" required placeholder="/home/me/projects/memo-app"></label>
+      <label>이 저장소의 목적 (선택, 2~3줄) <textarea name="purpose" rows="3"></textarea></label>
+      <label>문항 수 <input name="count" type="number" min="1" max="10"></label>
+      <label>문항당 시간(초) <input name="seconds" type="number" min="30"></label>
+      <div class="rh-mode"></div>
+      <div class="row">
+        <button type="button" class="ghost" data-go="home">취소</button>
+        <button type="submit" class="primary">출제하고 시작</button>
+      </div>
+    </form>
+    <p id="standalone-status" class="muted"></p>
+  </section>
+
+  <section id="new" class="view narrow hidden">
+    <h1>새 모의고사</h1>
+    <form id="form-new">
+      <label>도메인 <select name="domain"><option value="">랜덤 (지난 세션 도메인 제외)</option></select></label>
+      <label>과제 유형 <select name="archetype"><option value="">랜덤</option></select></label>
+      <label>난이도 <select name="difficulty"></select></label>
+      <label>시드 (선택) <input name="seed" type="number" placeholder="비우면 무작위"></label>
+      <div class="row">
+        <button type="button" class="ghost" data-go="home">취소</button>
+        <button type="submit" class="primary">출제하기</button>
+      </div>
+    </form>
+    <p id="gen-status" class="muted"></p>
+  </section>
+
+  <section id="created" class="view narrow hidden">
+    <h1>작업공간 생성 완료</h1>
+    <dl class="meta">
+      <dt>제목</dt><dd id="c-title"></dd>
+      <dt>도메인</dt><dd id="c-domain"></dd>
+      <dt>유형</dt><dd id="c-archetype"></dd>
+      <dt>난이도</dt><dd id="c-difficulty"></dd>
+    </dl>
+    <div class="path"><code class="ws-path"></code><button class="btn-copy">복사</button></div>
+    <p>이 경로에서 터미널을 열고 Codex/Claude Code를 실행하세요. 요구사항은 README와 현업 담당자에게 확인합니다.</p>
+    <fieldset class="modes">
+      <legend>모드</legend>
+      <label><input type="radio" name="mode" value="full" checked> 실전 모드 (일시정지 불가)</label>
+      <label><input type="radio" name="mode" value="practice"> 연습 모드</label>
+    </fieldset>
+    <div class="row">
+      <button class="ghost" data-go="home">홈으로</button>
+      <button id="btn-start" class="primary">응시 시작</button>
+    </div>
+  </section>
+
+  <section id="exam" class="view hidden">
+    <div class="exam">
+      <div class="pane">
+        <div class="path"><code class="ws-path"></code><button class="btn-copy">복사</button></div>
+        <p class="muted">이 경로에서 터미널을 열고 Codex/Claude Code로 작업하세요. 아래는 작업공간 README입니다.</p>
+        <pre id="readme" class="readme"></pre>
+      </div>
+      <aside class="dm">
+        <div class="contacts">
+          <button class="contact active" data-peer="persona"><b id="persona-name"></b><small id="persona-role"></small></button>
+          <button class="contact" data-peer="helper"><b>Helper</b><small>플랫폼 안내</small></button>
+        </div>
+        <div id="messages" class="messages"></div>
+        <form id="form-chat" class="composer">
+          <textarea name="text" rows="3" placeholder="메시지 입력 (Enter 전송, Shift+Enter 줄바꿈)"></textarea>
+        </form>
+      </aside>
+    </div>
+  </section>
+  <section id="submit" class="view narrow hidden">
+    <h1>제출</h1>
+    <p id="submit-timeover" class="warn hidden">시간이 종료되었습니다. 실행 명령을 입력하고 제출하세요.</p>
+    <form id="form-submit">
+      <label>실행 명령 <input name="run_command" required></label>
+      <label>포트 <input name="app_port" type="number" required></label>
+      <label>사용한 코딩 에이전트
+        <select name="agent_tool"><option value="codex">Codex</option><option value="claude_code">Claude Code</option><option value="other">기타</option></select>
+      </label>
+      <div id="dirty-box" class="warn hidden">
+        <p>커밋되지 않은 변경이 있습니다:</p>
+        <pre id="dirty-list"></pre>
+        <label class="inline"><input type="checkbox" name="auto_commit" checked> "submission snapshot"으로 자동 커밋</label>
+      </div>
+      <label>토큰 사용량 (선택, 로그를 못 찾았을 때만 사용) <input name="manual_tokens" type="number" placeholder="예: 350000"></label>
+      <div class="row">
+        <button type="button" id="btn-submit-cancel" class="ghost">돌아가기</button>
+        <button type="submit" class="primary">제출</button>
+      </div>
+    </form>
+    <p id="submit-status" class="muted"></p>
+  </section>
+
+  <section id="submitted" class="view narrow hidden">
+    <h1>제출 완료</h1>
+    <dl class="meta wide" id="sub-meta"></dl>
+    <h2>비밀키 검사</h2>
+    <div id="sub-secrets"></div>
+    <h2>설명 리허설</h2>
+    <p class="muted">결과물에 대한 확인 문제가 한 문항씩 나옵니다. 문항당 시간이 지나면 입력한 내용이 자동 제출되고, 붙여넣기는 막힙니다.</p>
+    <div id="sub-rh-start">
+      <div class="rh-mode"></div>
+      <div class="row">
+        <button class="ghost" data-go="home">홈으로</button>
+        <button id="btn-rh-start" class="primary">리허설 시작</button>
+      </div>
+    </div>
+    <div id="sub-rh-resume" class="row hidden">
+      <button class="ghost" data-go="home">홈으로</button>
+      <button id="btn-rh-resume" class="primary">리허설 이어하기 / 결과 보기</button>
+    </div>
+    <p id="rh-start-status" class="muted"></p>
+  </section>
+
+  <template id="tpl-rh-mode">
+    <fieldset class="modes">
+      <legend>리허설 모드</legend>
+      <label><input type="radio" name="rh_mode" value="closed_book" checked> closed book (실전: 코드를 보지 않고 답함)</label>
+      <label><input type="radio" name="rh_mode" value="open_book"> open book (연습: 코드를 보면서 답해도 됨)</label>
+      <label class="inline nolimit hidden"><input type="checkbox" name="no_time_limit"> 시간 제한 없음</label>
+      <label class="inline pledge"><input type="checkbox" name="pledge"> 리허설 중 작업공간·코드를 보지 않겠습니다</label>
+    </fieldset>
+  </template>
+
+  <section id="rehearsal" class="view narrow hidden">
+    <div class="rh-head"><h1 id="rh-progress"></h1><span id="rh-timer" class="timer"></span></div>
+    <p id="rh-type" class="muted"></p>
+    <p id="rh-question" class="rh-question"></p>
+    <textarea id="rh-answer" rows="10" placeholder="약점 지점 → 왜 위험한지 → 어떻게 검증·개선할지 순서로 쓰세요. (붙여넣기 불가)"></textarea>
+    <div class="row"><button id="btn-rh-answer" class="primary">답변 제출</button></div>
+    <p id="rh-status" class="muted"></p>
+  </section>
+
+  <section id="rh-results" class="view narrow hidden">
+    <h1>리허설 결과</h1>
+    <div id="rh-summary"></div>
+    <div id="rh-cards"></div>
+    <div class="row">
+      <button class="ghost" data-go="home">홈으로</button>
+      <button id="btn-rh-followup" class="hidden">재심문 받기 (미충족 주제 1~2문항)</button>
+      <button id="btn-report" class="primary hidden">평가 리포트 보기</button>
+    </div>
+    <p id="rh-followup-status" class="muted"></p>
+  </section>
+
+  <section id="report" class="view wide hidden">
+    <h1>평가 리포트</h1>
+    <p id="report-status" class="muted"></p>
+    <div id="report-body"></div>
+    <div class="row">
+      <button class="ghost" data-go="home">홈으로</button>
+      <button id="btn-reevaluate" class="ghost">다시 평가</button>
+      <button id="btn-reveal" class="primary">숨은 요구사항 공개</button>
+    </div>
+  </section>
+
+  <section id="reveal" class="view wide hidden">
+    <h1>숨은 요구사항 공개</h1>
+    <div id="reveal-body"></div>
+    <h2>회고</h2>
+    <textarea id="retro" rows="24"></textarea>
+    <div class="row">
+      <button class="ghost" data-go="home">홈으로</button>
+      <button id="btn-to-report" class="ghost">리포트 보기</button>
+      <button id="btn-retro-save" class="primary">회고 저장</button>
+    </div>
+    <p id="retro-status" class="muted"></p>
+  </section>
+
+  <section id="settings" class="view narrow hidden">
+    <h1>설정</h1>
+    <p class="muted">코딩 에이전트 세션 로그 위치. 버전에 따라 다르면 직접 지정하세요. 비우면 기본값.</p>
+    <form id="form-settings">
+      <label>Codex 세션 로그 디렉터리 <input name="codex_sessions_dir"></label>
+      <label>Claude Code 프로젝트 로그 디렉터리 <input name="claude_projects_dir"></label>
+      <div class="row">
+        <button type="button" class="ghost" data-go="home">닫기</button>
+        <button type="submit" class="primary">저장</button>
+      </div>
+    </form>
+    <p id="settings-status" class="muted"></p>
+  </section>
+</main>
+<script src="app.js"></script>
+</body>
+</html>

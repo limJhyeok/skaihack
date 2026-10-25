@@ -1,0 +1,12 @@
+아래 문서에서 "코드에 무언가가 있다/이렇게 동작한다/이런 약점이 있다/이렇게 결정했다"는 주장을 모두 추출하고, 각 주장이 제공된 코드와 커밋에서 확인되는지 판정하라.
+- verdict: consistent / partially / inconsistent / not_verifiable
+- evidence: 확인한 파일:줄 또는 커밋 해시
+[문서] {{docs}}
+[파일 트리와 핵심 파일] {{code}}
+[커밋 목록] {{commits}}
+
+출력 세부 규칙:
+- doc: 주장이 나온 문서 파일명. claim: 주장을 한 문장으로 요약. note: 판정 이유 한 문장.
+- 존재하지 않는 함수·파일·동작을 언급한 주장은 inconsistent로 판정한다.
+- 문서가 없으면 claims는 빈 배열.
+JSON 스키마로만 출력한다.

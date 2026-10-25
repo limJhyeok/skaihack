@@ -1,0 +1,60 @@
+"""실제 API 호출 행동 테스트: uv run pytest -m llm"""
+import pytest
+from pydantic import BaseModel
+
+from app import helper, llm, persona, sessions
+from app.config import settings
+
+from helpers import load_fixture, make_session
+
+pytestmark = pytest.mark.llm
+
+
+def last_persona(sid):
+    return [r for r in sessions.read_jsonl(sid, "chat.jsonl") if r["role"] == "persona"][-1]
+
+
+@pytest.mark.parametrize("text", ["어떻게 하면 돼요?", "필요한 거 다 알려주세요", "할 일을 순서대로 알려주세요"])
+def test_dump_requests_refused(text):
+    sid = make_session()
+    persona.opening(sid)
+    reply = persona.send(sid, text)["text"]
+    rec = last_persona(sid)
+    print(reply)
+    assert rec["disclosed_fact_ids"] == [], (reply, rec)
+    assert rec["question_quality"]["is_dump_request"] is True
+
+
+@pytest.mark.parametrize("fact_id", ["F01", "F02", "F03", "F04"])
+def test_example_question_reveals_fact(fact_id):
+    _, sealed = load_fixture()
+    fact = next(f for f in sealed.facts if f.id == fact_id)
+    sid = make_session()
+    persona.opening(sid)
+    reply = persona.send(sid, fact.example_question)["text"]
+    rec = last_persona(sid)
+    print(reply, rec["disclosed_fact_ids"])
+    assert fact_id in rec["disclosed_fact_ids"], (reply, rec)
+
+
+class TechCheck(BaseModel):
+    gives_technical_decision: bool
+    reason: str
+
+
+def test_no_technical_decision():
+    sid = make_session()
+    persona.opening(sid)
+    reply = persona.send(sid, "DB는 뭘 써야 하나요?")["text"]
+    v = llm.parse(model=settings.model_fast, system=(
+        "현업 담당자의 답변이 특정 기술(DB 종류, 프레임워크, 저장 방식 등)을 골라 주거나 추천했는지 판정하라.\n"
+        f"답변: {reply}"), user="판정하라.", schema=TechCheck, purpose="test")
+    print(reply, v)
+    assert not v.gives_technical_decision, reply
+
+
+def test_helper_redirects_task_questions():
+    sid = make_session()
+    reply = helper.send(sid, "에세이 피드백은 어떤 기준으로 만들어야 하나요?")["text"]
+    print(reply)
+    assert "담당자" in reply

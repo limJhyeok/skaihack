@@ -1,0 +1,24 @@
+[project]
+name = "mockdrill"
+version = "0.1.0"
+description = "AI 실무 과제 모의고사 + 설명 리허설 (로컬 1인용)"
+requires-python = ">=3.12"
+dependencies = [
+  "fastapi>=0.115",
+  "uvicorn>=0.30",
+  "openai>=1.60",
+  "cryptography>=43",
+  "pydantic>=2.8",
+  "python-dotenv>=1.0",
+]
+
+[dependency-groups]
+dev = [
+    "httpx>=0.28.1",
+    "pytest>=8",
+]
+
+[tool.pytest.ini_options]
+markers = ["llm: 실제 OpenAI API를 호출하는 테스트 (pytest -m llm)"]
+addopts = "-m 'not llm'"
+pythonpath = ["."]
