@@ -94,6 +94,56 @@ def test_readme_paste_and_regeneration_detected(tmp_path):
     assert a["verification_prompts"] == 1
 
 
+def _cmd(sec, cmd, ok, out=""):
+    return {"ts": None, "cmd": cmd, "ok": ok, "elapsed_sec": sec, "output_tail": out}
+
+
+def test_command_kind_ignores_search_and_install():
+    assert metrics.command_kind("cd app && timeout 120 uv run pytest -q 2>&1 | tail -3") == "test"
+    assert metrics.command_kind("CI=1 npm run test") == "test"
+    assert metrics.command_kind('grep -rn "pytest" docs | head') is None
+    assert metrics.command_kind("pip install pytest") is None
+    assert metrics.command_kind("cat tests/test_api.py") is None
+    assert metrics.command_kind("curl -s http://127.0.0.1:8000/health") == "smoke"
+
+
+def test_outcome_reads_summary_through_pipe():
+    # `pytest | tail`은 종료 코드 0이어도 출력 요약 줄이 실패면 실패
+    assert metrics.test_outcome(_cmd(0, "pytest -q | tail -2", True, "1 failed, 9 passed in 0.5s")) is False
+    assert metrics.test_outcome(_cmd(0, "pytest -q", False, "10 passed in 0.5s")) is True
+    assert metrics.test_outcome(_cmd(0, "npm test", False, "")) is False  # 요약 줄이 없으면 종료 상태
+
+
+def test_verification_runs_timeline_and_results():
+    traces = [{"commands": [_cmd(600, "pip install pytest", True), _cmd(900, "cat main.py", True),
+                            _cmd(1200, "uv run pytest -q", False), _cmd(1500, "pytest tests/test_api.py", True),
+                            _cmd(1600, "curl -s localhost:8000/health", True)]}]
+    commits = [{"hash": "init", "stat": " README.md | 3 +++", "elapsed_sec": -10},
+               {"hash": "a", "stat": " main.py | 40 ++++", "elapsed_sec": 1550},
+               {"hash": "b", "stat": " main.py | 5 ++", "elapsed_sec": 3000},
+               {"hash": "c", "stat": " NOTES.md | 5 ++", "elapsed_sec": 3100}]
+    v = metrics.verification_runs(traces, commits)
+    assert (v["test_runs"], v["test_passed"], v["test_failed"]) == (2, 1, 1)  # 설치 명령은 제외
+    assert v["fail_then_pass"] and v["first_test_elapsed_sec"] == 1200
+    assert v["last_test"] == {"elapsed_sec": 1500, "ok": True}
+    assert v["code_commits_after_last_pass"] == 2  # 문서만 바꾼 커밋은 세지 않음
+    assert v["smoke_checks"] == 1 and [r["kind"] for r in v["timeline"]] == ["test", "test", "smoke"]
+    assert metrics.verification_runs([{"user_prompts": []}], [])["test_runs"] == 0  # 이전 process.json 호환
+
+
+def test_commit_sizes_flags_big_bang_and_final_window():
+    commits = [{"hash": "init", "stat": " README.md | 900 +++", "elapsed_sec": -10},
+               {"hash": "a", "stat": " main.py | 20 ++\n package-lock.json | 5000 +++", "elapsed_sec": 1800},
+               {"hash": "b", "stat": " main.py | 30 ++\n app.js | 400 +++\n 2 files changed", "elapsed_sec": 10000}]
+    c = metrics.commit_sizes(commits, duration_sec=180 * 60)
+    assert c["commits"] == 2 and c["total_lines"] == 450  # 초기 커밋·lock 파일 제외
+    assert c["max_commit"] == "b" and c["max_share"] == 0.96 and c["big_bang"]
+    assert c["final_30min_share"] == 0.96
+    small = [commits[0]] + [{"hash": h, "stat": " main.py | 40 ++", "elapsed_sec": s} for h, s in (("x", 1000), ("y", 4000), ("z", 7000))]
+    c = metrics.commit_sizes(small, duration_sec=180 * 60)
+    assert not c["big_bang"] and c["final_30min_share"] == 0.0 and c["median_lines"] == 40
+
+
 def test_paraphrase_is_not_paste():
     assert metrics.readme_overlap(README, "학생이 에세이를 내면 피드백을 주는 서비스를 FastAPI로 만들자") < 0.3
 

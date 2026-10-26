@@ -44,6 +44,7 @@ def test_codex_adapter(tmp_path):
     assert t.tool_calls_count == 2
     assert t.files_edited == [f"{ws}/NOTES.md"]
     assert t.agent_messages == []  # 픽스처에는 AgentMessage 없음
+    assert [(c["cmd"], c["exit_code"], c["ok"]) for c in t.commands] == [("cat README.md", 0, True), ("uv run pytest -q", 1, False)]
     assert [x["billable"] for x in t.token_timeline] == [15290 - 12288 + 77, 3897]
     assert t.token_usage == {"input": 62029, "cached_input": 58368, "output": 236, "total": 62265, "billable": 3897}
 
@@ -57,12 +58,14 @@ def test_claude_adapter(tmp_path):
     assert a.find_sessions(ws, start, end) == [p]
     t = a.parse(p)
     assert [x["text"] for x in t.user_prompts] == ["README 읽고 계획 세워줘", "테스트도 돌려줘"]
-    assert t.tool_calls_count == 2
+    assert t.tool_calls_count == 3
     assert t.files_edited == [f"{ws}/PLAN.md"]
+    # Bash 결과의 is_error로 성공 여부 판정
+    assert [(c["cmd"], c["ok"]) for c in t.commands] == [("ls", True), ("pytest -q", False)]
     # msg_1은 두 줄이지만 한 번만 합산
-    assert t.token_usage["output"] == 150
-    assert t.token_usage["billable"] == 2 + 1000 + 100 + 3 + 0 + 50
-    assert [x["billable"] for x in t.token_timeline] == [1102, 1155]
+    assert t.token_usage["output"] == 160
+    assert t.token_usage["billable"] == 2 + 1000 + 100 + 3 + 0 + 50 + 1 + 10
+    assert [x["billable"] for x in t.token_timeline] == [1102, 1155, 1166]
 
 
 # ---------- 타이머 ----------

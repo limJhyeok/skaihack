@@ -669,12 +669,12 @@ function axis(title, score, max, items) {
 
 function renderTimeline(tl) {
   const box = el("div", "tl");
-  const lanes = [["chat", "담당자 질문"], ["fact", "사실 공개"], ["session", "에이전트 세션"], ["prompt", "프롬프트"], ["commit", "커밋"], ["alert", "알림·제출"]];
+  const lanes = [["chat", "담당자 질문"], ["fact", "사실 공개"], ["session", "에이전트 세션"], ["prompt", "프롬프트"], ["verify", "테스트·확인"], ["commit", "커밋"], ["alert", "알림·제출"]];
   for (const [lane, label] of lanes) {
     const row = el("div", "tl-row");
     const track = el("div", "tl-track");
     for (const e of tl.events.filter((x) => x.lane === lane)) {
-      const dot = el("div", `tl-dot lane-${lane}`);
+      const dot = el("div", `tl-dot lane-${lane}${e.ok === false ? " fail" : ""}`);
       dot.style.left = `${(100 * e.t) / tl.duration_sec}%`;
       dot.title = `+${fmtSec(e.t)} ${e.label}`;
       track.append(dot);
@@ -728,6 +728,7 @@ function renderReport(rep) {
   const m = i.metrics;
   const intent = axis("의도 관리", sc.intent, 100, i.items);
   const dv = m.interview.discovery;
+  const vr = m.verification_runs, cs = m.commit_sizes;  // 이전 리포트에는 없음
   const rate = (x) => `${x.found}/${x.total}`;
   intent.append(el("h3", "", "정량 지표"));
   intent.append(kvList([
@@ -741,6 +742,10 @@ function renderReport(rep) {
     ["README 통째 붙여넣기", m.agent.readme_paste.length ? m.agent.readme_paste.map((p) => `S${p.session} +${fmtSec(p.elapsed_sec)} (겹침 ${Math.round(p.overlap * 100)}%)`).join(", ") : "없음"],
     ["구현 전 계획·대안 요청", `${m.agent.planning_before_impl.length}회`],
     ["검증 관련 프롬프트 비율", m.agent.verification_ratio == null ? "-" : `${Math.round(m.agent.verification_ratio * 100)}%`],
+    ["테스트 실행 (통과·실패)", vr ? `${vr.test_runs}회 (${vr.test_passed}·${vr.test_failed})${vr.fail_then_pass ? ", 실패 후 통과 있음" : ""}${vr.last_test ? `, 마지막 +${fmtSec(vr.last_test.elapsed_sec)} ${vr.last_test.ok === false ? "실패" : vr.last_test.ok ? "통과" : "결과 모름"}` : ""}` : "-"],
+    ["마지막 통과 뒤 코드 커밋 / 서버 확인", vr ? `${vr.code_commits_after_last_pass ?? "-"}개 / ${vr.smoke_checks}회` : "-"],
+    ["커밋 크기 (개수·중앙값·최대)", cs ? (cs.total_lines ? `${cs.commits}개 · ${cs.median_lines}줄 · ${cs.max_lines}줄 (전체의 ${Math.round(cs.max_share * 100)}%)${cs.big_bang ? " ⚠ 한 커밋에 몰림" : ""}` : `${cs.commits}개`) : "-"],
+    ["마지막 30분 변경 비중", cs?.final_30min_share == null ? "-" : `${Math.round(cs.final_30min_share * 100)}%`],
     ["전체 재생성 감지", m.agent.full_regeneration.length ? m.agent.full_regeneration.map((p) => `S${p.session} +${fmtSec(p.elapsed_sec)} "${p.text.slice(0, 40)}"`).join(" / ") : "없음"],
     ["토큰 급증 구간", m.agent.token_spikes.length ? m.agent.token_spikes.map((p) => `S${p.session} +${fmtSec(p.elapsed_sec)} ${p.tokens.toLocaleString()}`).join(", ") : "없음"],
     ["세션 수 / 전환 전 HANDOFF 갱신", `${m.agent.sessions}개 / ${m.agent.session_switches.map((x) => (x.handoff_committed_before || x.handoff_edited_in_prev_session ? "O" : "X")).join(" ") || "-"}`],

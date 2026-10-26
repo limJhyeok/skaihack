@@ -71,8 +71,9 @@ def collect(session: Session, end: datetime, manual_tokens: int | None = None) -
         try:
             for p in adapter.find_sessions(ws, start, end):
                 t = adapter.parse(p)
-                t.user_prompts = [x for x in t.user_prompts
-                                  if x["ts"] and start <= datetime.fromisoformat(x["ts"].replace("Z", "+00:00")) <= end]
+                in_window = lambda x: x["ts"] and start <= datetime.fromisoformat(x["ts"].replace("Z", "+00:00")) <= end  # noqa: E731
+                t.user_prompts = [x for x in t.user_prompts if in_window(x)]
+                t.commands = [x for x in t.commands if in_window(x)]
                 copy_dir.mkdir(exist_ok=True)
                 shutil.copy2(p, copy_dir / f"{adapter.name}_{p.name}")
                 traces.append(t.to_dict())
@@ -81,7 +82,7 @@ def collect(session: Session, end: datetime, manual_tokens: int | None = None) -
     traces.sort(key=lambda t: t["started_at"] or "")
     for t in traces:
         t["elapsed_start_sec"] = int((datetime.fromisoformat(t["started_at"].replace("Z", "+00:00")) - start).total_seconds())
-        for x in t["user_prompts"]:
+        for x in t["user_prompts"] + t["commands"]:
             x["elapsed_sec"] = int((datetime.fromisoformat(x["ts"].replace("Z", "+00:00")) - start).total_seconds())
     out["agent_traces"] = traces
     out["agent_status"] = "ok" if traces else NOT_COLLECTED

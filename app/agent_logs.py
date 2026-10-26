@@ -5,9 +5,11 @@
   사용자 프롬프트 = event_msg/item_completed 중 item.type == "UserMessage".
   토큰 = 마지막 event_msg/token_count.info.total_token_usage (누적값).
   편집 파일 = item_completed 중 item.type == "FileChange"의 changes 키.
+  실행 명령 = item_completed 중 item.type == "CommandExecution"의 command(["/bin/bash", "-lc", 명령])와 exit_code.
 - Claude Code: <root>/<인코딩된 경로>/<session>.jsonl. 각 줄에 cwd.
   사용자 프롬프트 = type "user", isMeta 아님, content가 문자열(또는 text 블록).
   토큰 = assistant message.usage를 message.id로 중복 제거 후 합산.
+  실행 명령 = Bash tool_use의 input.command. 성공 여부는 짝이 되는 tool_result의 is_error(종료 코드 0이 아니면 true).
 """
 import json
 import os
@@ -18,6 +20,8 @@ from typing import Protocol
 
 
 MSG_CAP = 800  # 에이전트 메시지 1개당 보관 글자 수
+CMD_CAP = 300  # 실행 명령 1개당 보관 글자 수
+OUT_CAP = 400  # 실행 출력은 끝부분만 보관 (테스트 요약 줄 판정용)
 
 
 @dataclass
@@ -30,6 +34,9 @@ class AgentTrace:
     user_prompts: list[dict] = field(default_factory=list)  # [{ts, text}]
     agent_messages: list[dict] = field(default_factory=list)  # [{ts, text}] 에이전트의 답변·제안 (리허설 ai_decision 문항 근거)
     tool_calls_count: int = 0
+    # [{ts, cmd, exit_code, ok, output_tail}] 에이전트가 실행한 셸 명령. ok는 종료 상태(모르면 None)
+    # `pytest | tail`처럼 파이프가 종료 코드를 가리므로 테스트 판정은 output_tail을 우선한다 (metrics.test_outcome)
+    commands: list[dict] = field(default_factory=list)
     files_edited: list[str] = field(default_factory=list)
     # [{ts, billable}] 누적 billable 토큰의 시간 흐름 (토큰 급증 구간 감지용)
     token_timeline: list[dict] = field(default_factory=list)
@@ -124,6 +131,14 @@ class CodexAdapter:
                         t.agent_messages.append({"ts": ts, "text": text[:MSG_CAP]})
                 elif item.get("type") == "FileChange":
                     files.update((item.get("changes") or {}).keys())
+                elif item.get("type") == "CommandExecution":
+                    cmd = item.get("command") or ""
+                    if isinstance(cmd, list):
+                        cmd = cmd[-1] if len(cmd) >= 3 and cmd[-2] in ("-lc", "-c") else " ".join(cmd)
+                    code = item.get("exit_code")
+                    out = item.get("aggregated_output") or (item.get("stdout") or "") + (item.get("stderr") or "")
+                    t.commands.append({"ts": ts, "cmd": cmd[:CMD_CAP], "exit_code": code,
+                                       "ok": None if code is None else code == 0, "output_tail": out[-OUT_CAP:]})
             elif r.get("type") == "event_msg" and p.get("type") == "token_count":
                 usage = ((p.get("info") or {}).get("total_token_usage")) or usage
                 if usage:
@@ -165,6 +180,7 @@ class ClaudeCodeAdapter:
         files: set[str] = set()
         usage_by_msg: dict[str, dict] = {}
         tool_ids: set[str] = set()
+        bash_cmds: dict[str, dict] = {}  # tool_use id → commands 항목 (tool_result로 ok 채움)
         for r in _read(path):
             ts = r.get("timestamp")
             if ts:
@@ -172,6 +188,13 @@ class ClaudeCodeAdapter:
                 t.ended_at = ts
             m = r.get("message") or {}
             content = m.get("content")
+            if r.get("type") == "user" and isinstance(content, list):
+                for c in content:
+                    if isinstance(c, dict) and c.get("type") == "tool_result" and c.get("tool_use_id") in bash_cmds:
+                        out = c.get("content")
+                        if isinstance(out, list):
+                            out = "".join(x.get("text", "") for x in out if isinstance(x, dict))
+                        bash_cmds[c["tool_use_id"]].update(ok=not c.get("is_error", False), output_tail=(out or "")[-OUT_CAP:])
             if r.get("type") == "user" and not r.get("isMeta"):
                 if isinstance(content, str):
                     text = content
@@ -193,6 +216,10 @@ class ClaudeCodeAdapter:
                         t.agent_messages.append({"ts": ts, "text": c["text"][:MSG_CAP]})
                     if c.get("type") == "tool_use" and c.get("id") not in tool_ids:
                         tool_ids.add(c.get("id"))
+                        if c.get("name") == "Bash" and (c.get("input") or {}).get("command"):
+                            bash_cmds[c["id"]] = {"ts": ts, "cmd": c["input"]["command"][:CMD_CAP], "exit_code": None, "ok": None,
+                                                 "output_tail": ""}
+                            t.commands.append(bash_cmds[c["id"]])
                         if c.get("name") in EDIT_TOOLS:
                             fp = (c.get("input") or {}).get("file_path") or (c.get("input") or {}).get("notebook_path")
                             if fp:

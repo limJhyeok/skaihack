@@ -22,6 +22,8 @@
 출력 세부 규칙:
 - items의 key는 위 영문 키 6개를 순서대로 정확히 쓴다. suggestion에는 그 항목의 개선 제안 한 문장.
 - 정량 지표에 README 통째 붙여넣기(readme_paste)나 전체 재생성(full_regeneration)이 있으면 decomposition_delegation 판정문에 해당 프롬프트를 인용한다.
+- verification_loop는 프롬프트에 "테스트해줘"라고 쓴 것보다 verification_runs(에이전트가 실제로 실행한 테스트·서버 확인 명령과 결과)를 우선 근거로 삼는다. test_runs가 0이면 "실제 테스트 실행 흔적 없음"을 판정문에 쓴다. code_commits_after_last_pass가 2 이상이면 마지막 통과 뒤 검증 없이 바뀐 코드가 있다는 뜻이다. agent.status가 수집 안 됨이면 실행 흔적이 없는 것이 아니라 알 수 없는 것으로 다룬다.
+- commit_sizes.big_bang이 참이거나 final_30min_share가 0.5 이상이면 decomposition_delegation 판정문에 커밋 해시와 비중을 인용한다(작게 나눠 진행하지 않았거나 막판에 결과물을 크게 바꾼 신호).
 - 증거 좌표 형식 예: "채팅 #7", "프롬프트 S1 +01:12:30", "ACCEPTANCE.md", "커밋 a1b2c3d".
 - communication(소통, 참고 점수 0~100): HANDOFF.md 등 인계 문서가 있고 실제 상태와 맞는가, 다른 사람이 README만 보고 실행·이어서 작업할 수 있는가.
 - 이 리포트는 숨은 요구 공개 전에 응시자에게 보이므로, 발견하지 못한 숨은 사실의 내용은 직접 쓰지 말고 사실 ID로만 언급한다.

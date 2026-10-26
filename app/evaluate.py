@@ -138,6 +138,9 @@ def timeline(session, chat: list[dict], process: dict, events: list[dict]) -> di
         ev.append({"lane": "session", "t": t.get("elapsed_start_sec"), "label": f"에이전트 세션 S{si} 시작"})
         for p in t["user_prompts"]:
             ev.append({"lane": "prompt", "t": p.get("elapsed_sec"), "label": f"S{si}: {p['text'][:80]}"})
+    for r in metrics.verification_runs(process.get("agent_traces", []), [])["timeline"]:
+        mark = {True: "통과", False: "실패", None: "결과 모름"}[r["ok"]]
+        ev.append({"lane": "verify", "t": r["elapsed_sec"], "ok": r["ok"], "label": f"S{r['session']} [{mark}] {r['cmd'][:80]}"})
     for c in process.get("commits", []):
         ev.append({"lane": "commit", "t": c.get("elapsed_sec"), "label": f"{c['hash'][:7]} {c['subject'][:60]}"})
     for e in events:
@@ -170,7 +173,7 @@ def evaluate(session_id: str) -> dict:
 
     # 2) 정량 지표
     m = metrics.compute(readme=problem.readme_markdown, sealed=sealed, chat=chat, process=process,
-                        workspace=Path(s.workspace_path))
+                        workspace=Path(s.workspace_path), duration_sec=s.duration_min * 60)
     disc = metrics.discovery(sealed, chat)
 
     # 3) LLM 평가 (병렬)

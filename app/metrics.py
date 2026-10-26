@@ -15,6 +15,21 @@ VERIFY_RE = re.compile(r"테스트|검증|확인해|확인하|실행해|실행�
 REGEN_RE = re.compile(r"처음부터|전부 다시|전체를? 다시|다시 (만들|작성|짜)|새로 (만들|작성|짜)|갈아엎|싹 ?다|from scratch|rewrite|start over", re.I)
 SPIKE_MIN = 20_000  # 이 이하의 증가는 급증으로 보지 않음
 SPIKE_FACTOR = 3
+# 명령을 &&·||·;·| 로 나눈 각 조각의 "실행 파일" 자리에서만 찾는다 (grep "pytest" 같은 검색어는 제외)
+CMD_SPLIT_RE = re.compile(r"&&|\|\||;|\||\n")
+RUNNER_PREFIX = r"^(?:(?:timeout\s+\S+|time|env|\w+=\S*|uv run(?:\s+--\S+)*|poetry run|npx|pnpm exec|python3?\s+-m)\s+)*"
+TEST_SEG_RE = re.compile(RUNNER_PREFIX + r"(?:pytest|py\.test|unittest|vitest|jest|mocha|playwright test|go test|cargo test"
+                         r"|(?:npm|pnpm|yarn|bun)(?: run)? test|(?:python3?\s+)?manage\.py test)\b", re.I)
+SMOKE_SEG_RE = re.compile(RUNNER_PREFIX + r"(?:curl|wget|https?)\b.*(?:localhost|127\.0\.0\.1|0\.0\.0\.0)", re.I)
+# 테스트 러너 요약 줄. 실패 표시를 통과보다 먼저 본다
+TEST_FAIL_OUT_RE = re.compile(r"\b\d+ (?:failed|failing|errors?)\b|^FAILED\b|^FAIL\b|Tests:.*\bfailed", re.I | re.M)
+TEST_PASS_OUT_RE = re.compile(r"\b\d+ (?:passed|passing)\b|^ok\s|^OK\b|Tests:.*\bpassed", re.M)
+TIMELINE_CAP = 40
+LOCK_FILES = {"package-lock.json", "yarn.lock", "pnpm-lock.yaml", "uv.lock", "poetry.lock", "Cargo.lock"}
+STAT_LINE_RE = re.compile(r"^\s*(.+?)\s+\|\s+(\d+)")
+BIG_BANG_MIN_LINES = 150
+BIG_BANG_SHARE = 0.6
+FINAL_WINDOW_SEC = 30 * 60
 
 
 def _ts(s: str | None) -> datetime | None:
@@ -26,12 +41,88 @@ def readme_overlap(readme: str, prompt: str) -> float:
     return len(grams & _ngrams(_norm(prompt))) / len(grams) if grams else 0.0
 
 
+def _touches_code(c: dict) -> bool:
+    return any(Path(line.split("|")[0].strip()).suffix in CODE_EXT for line in c.get("stat", "").splitlines())
+
+
 def first_impl_commit(commits: list[dict]) -> dict | None:
     """초기 커밋 이후 코드 파일을 처음 건드린 커밋."""
-    for c in commits[1:]:
-        if any(Path(line.split("|")[0].strip()).suffix in CODE_EXT for line in c.get("stat", "").splitlines()):
-            return c
+    return next((c for c in commits[1:] if _touches_code(c)), None)
+
+
+def command_kind(cmd: str) -> str | None:
+    segs = [s.strip() for s in CMD_SPLIT_RE.split(cmd)]
+    if any(TEST_SEG_RE.match(s) for s in segs):
+        return "test"
+    if any(SMOKE_SEG_RE.match(s) for s in segs):
+        return "smoke"
     return None
+
+
+def test_outcome(c: dict) -> bool | None:
+    """테스트 요약 줄이 출력에 있으면 그것으로, 없으면 종료 상태로 판정."""
+    out = c.get("output_tail") or ""
+    if TEST_FAIL_OUT_RE.search(out):
+        return False
+    if TEST_PASS_OUT_RE.search(out):
+        return True
+    return c.get("ok")
+
+
+def verification_runs(traces: list[dict], commits: list[dict]) -> dict:
+    """에이전트가 실제로 실행한 테스트·서버 확인 명령의 타임라인과 결과."""
+    runs = []
+    for si, t in enumerate(traces, 1):
+        for c in t.get("commands", []):
+            kind = command_kind(c["cmd"])
+            if kind:
+                runs.append({"session": si, "elapsed_sec": c.get("elapsed_sec"), "kind": kind, "cmd": c["cmd"][:120],
+                             "ok": test_outcome(c) if kind == "test" else c.get("ok")})
+    runs.sort(key=lambda r: r["elapsed_sec"] if r["elapsed_sec"] is not None else -1)
+    tests = [r for r in runs if r["kind"] == "test"]
+    passed = [r for r in tests if r["ok"] is True]
+    first_fail = next((r for r in tests if r["ok"] is False), None)
+    last_pass = passed[-1] if passed else None
+    after_pass = None
+    if last_pass and last_pass["elapsed_sec"] is not None:
+        after_pass = sum(1 for c in commits[1:] if _touches_code(c)
+                         and (c.get("elapsed_sec") or 0) > last_pass["elapsed_sec"])
+    return {
+        "test_runs": len(tests),
+        "test_passed": len(passed),
+        "test_failed": sum(r["ok"] is False for r in tests),
+        "first_test_elapsed_sec": tests[0]["elapsed_sec"] if tests else None,
+        "last_test": {"elapsed_sec": tests[-1]["elapsed_sec"], "ok": tests[-1]["ok"]} if tests else None,
+        "fail_then_pass": bool(first_fail and any((r["elapsed_sec"] or 0) > (first_fail["elapsed_sec"] or 0) for r in passed)),
+        # 1이면 보통 "테스트 → 커밋" 순서. 2 이상이면 마지막 통과 뒤에 검증 없이 코드가 더 바뀐 것
+        "code_commits_after_last_pass": after_pass,
+        "smoke_checks": sum(r["kind"] == "smoke" for r in runs),
+        "timeline": runs[:TIMELINE_CAP],
+    }
+
+
+def commit_sizes(commits: list[dict], duration_sec: int | None) -> dict:
+    """초기 커밋 제외, 커밋별 변경 줄 수(lock 파일·node_modules 제외)의 분포."""
+    rows = []
+    for c in commits[1:]:
+        lines = 0
+        for line in c.get("stat", "").splitlines():
+            m = STAT_LINE_RE.match(line)
+            if m and Path(m.group(1)).name not in LOCK_FILES and "node_modules" not in m.group(1):
+                lines += int(m.group(2))
+        rows.append({"hash": c["hash"], "elapsed_sec": c.get("elapsed_sec"), "lines": lines})
+    total = sum(r["lines"] for r in rows)
+    if not total:
+        return {"commits": len(rows), "total_lines": 0, "median_lines": None, "max_lines": None, "max_commit": None,
+                "max_share": None, "final_30min_share": None, "big_bang": False}
+    big = max(rows, key=lambda r: r["lines"])
+    final = None
+    if duration_sec:
+        final = round(sum(r["lines"] for r in rows if (r["elapsed_sec"] or 0) >= duration_sec - FINAL_WINDOW_SEC) / total, 2)
+    share = round(big["lines"] / total, 2)
+    return {"commits": len(rows), "total_lines": total, "median_lines": statistics.median(r["lines"] for r in rows),
+            "max_lines": big["lines"], "max_commit": big["hash"], "max_share": share, "final_30min_share": final,
+            "big_bang": total >= BIG_BANG_MIN_LINES and share >= BIG_BANG_SHARE}
 
 
 def file_added_at(workspace: Path, name: str) -> str | None:
@@ -92,7 +183,8 @@ def token_spikes(traces: list[dict]) -> list[dict]:
     return [r for r in rows if r["tokens"] >= SPIKE_MIN and r["tokens"] >= SPIKE_FACTOR * med]
 
 
-def compute(*, readme: str, sealed: Sealed, chat: list[dict], process: dict, workspace: Path) -> dict:
+def compute(*, readme: str, sealed: Sealed, chat: list[dict], process: dict, workspace: Path,
+            duration_sec: int | None = None) -> dict:
     commits = process.get("commits", [])
     traces = process.get("agent_traces", [])
     docs = process.get("docs", {})
@@ -166,6 +258,8 @@ def compute(*, readme: str, sealed: Sealed, chat: list[dict], process: dict, wor
             "sessions": len(traces),
             "session_switches": switches,
         },
+        "verification_runs": verification_runs(traces, commits),
+        "commit_sizes": commit_sizes(commits, duration_sec),
         "tokens": process.get("token_usage"),
         "token_source": process.get("token_source"),
         "commits": len(commits),

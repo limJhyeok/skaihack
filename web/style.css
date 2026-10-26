@@ -92,7 +92,7 @@ details pre { white-space:pre-wrap; background:var(--bg); border:1px solid var(-
 .tl-track { position:relative; height:14px; background:var(--panel); border-radius:7px; }
 .tl-dot { position:absolute; top:2px; width:10px; height:10px; border-radius:5px; transform:translateX(-5px); cursor:help; }
 .lane-chat { background:#4f8cff; } .lane-fact { background:#3fbf6f; } .lane-prompt { background:#c38bff; }
-.lane-commit { background:#ffb84d; } .lane-session { background:#e6e8eb; } .lane-alert { background:#ff8a8a; }
+.lane-commit { background:#ffb84d; } .lane-verify { background:#5ad1c4; } .tl-dot.fail { background:#ff5c5c; } .lane-session { background:#e6e8eb; } .lane-alert { background:#ff8a8a; }
 .tl-axis { display:grid; grid-template-columns:110px 1fr; font-size:11px; color:var(--muted); }
 .tl-axis div { display:flex; justify-content:space-between; }
 .found { color:#9be2b0; } .notfound { color:#ff9a9a; }
