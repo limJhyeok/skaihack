@@ -69,6 +69,17 @@ def test_codectx_line_numbers_and_excerpt():
     assert "main.py:23-27" in ex and "def summarize" in ex
 
 
+def test_codectx_inside_ignored_dir_of_parent_repo(tmp_path):
+    # 스냅샷은 .git 없이 상위 저장소의 무시 경로(data/) 안에 풀린다 → git ls-files가 빈 목록을 준다
+    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
+    (tmp_path / ".gitignore").write_text("data/\n")
+    snap = tmp_path / "data" / "snapshot"
+    snap.mkdir(parents=True)
+    (snap / "main.py").write_text((SAMPLE / "main.py").read_text())
+    ctx = codectx.build(snap)
+    assert ctx.files == ["main.py"] and "summarize" in ctx.identifiers()
+
+
 # ---------- API 흐름 (LLM 모의) ----------
 
 @pytest.fixture

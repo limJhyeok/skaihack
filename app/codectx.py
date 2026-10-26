@@ -89,6 +89,8 @@ def _list_files(root: Path) -> list[str]:
                              cwd=root, capture_output=True, text=True, check=True).stdout.split("\n")
         files = [f for f in out if f and (root / f).is_file()]
     except (subprocess.CalledProcessError, FileNotFoundError):
+        files = []
+    if not files:  # .git 없는 스냅샷이 상위 저장소의 무시 경로(data/) 안에 있으면 git은 빈 목록을 준다
         files = [str(p.relative_to(root)) for p in root.rglob("*") if p.is_file()]
     return sorted(f for f in files
                   if not any(part in SKIP_DIRS for part in Path(f).parts) and Path(f).name != ".env")
