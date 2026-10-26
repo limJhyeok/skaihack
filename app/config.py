@@ -31,9 +31,9 @@ def load_settings() -> Settings:
         model_fast=os.environ.get("MOCK_MODEL_FAST", ""),
         workspace_root=Path(os.environ.get("MOCK_WORKSPACE_ROOT", "~/mock-workspaces")).expanduser().resolve(),
         data_dir=Path(os.environ.get("MOCK_DATA_DIR", APP_ROOT / "data")).resolve(),  # 테스트용 재지정
-        duration_min=int(os.environ.get("MOCK_DURATION_MIN", "220")),
-        rehearsal_count=int(os.environ.get("MOCK_REHEARSAL_COUNT", "5")),
-        rehearsal_sec=int(os.environ.get("MOCK_REHEARSAL_SEC", "180")),
+        duration_min=int(os.environ.get("MOCK_DURATION_MIN", "180")),
+        rehearsal_count=int(os.environ.get("MOCK_REHEARSAL_COUNT", "6")),
+        rehearsal_sec=int(os.environ.get("MOCK_REHEARSAL_SEC", "300")),
         lang=os.environ.get("MOCK_LANG", "ko"),
     )
     check_paths(s.workspace_root, APP_ROOT)

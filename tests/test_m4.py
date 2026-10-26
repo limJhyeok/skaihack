@@ -121,7 +121,7 @@ def test_standalone_flow_hides_model_answers_until_graded(fake_llm):
 
 def test_cannot_answer_twice_or_unstarted(fake_llm):
     c = TestClient(app)
-    rid = c.post("/api/rehearsals", json={"repo_path": str(SAMPLE)}).json()["rehearsal_id"]
+    rid = c.post("/api/rehearsals", json={"repo_path": str(SAMPLE), "count": 5}).json()["rehearsal_id"]
     assert c.post(f"/api/rehearsals/{rid}/questions/Q2/answer", json={"answer": "x"}).status_code == 409
     c.post(f"/api/rehearsals/{rid}/next")
     c.post(f"/api/rehearsals/{rid}/questions/Q1/answer", json={"answer": "x"})
@@ -131,7 +131,7 @@ def test_cannot_answer_twice_or_unstarted(fake_llm):
 
 def test_followup_after_two_misses(fake_llm, monkeypatch):
     c = TestClient(app)
-    rid = c.post("/api/rehearsals", json={"repo_path": str(SAMPLE)}).json()["rehearsal_id"]
+    rid = c.post("/api/rehearsals", json={"repo_path": str(SAMPLE), "count": 5}).json()["rehearsal_id"]
     for _ in range(5):
         q = c.post(f"/api/rehearsals/{rid}/next").json()["question"]
         c.post(f"/api/rehearsals/{rid}/questions/{q['id']}/answer", json={"answer": ""})
@@ -146,7 +146,7 @@ def test_followup_after_two_misses(fake_llm, monkeypatch):
 
 def test_open_book_no_time_limit(fake_llm):
     c = TestClient(app)
-    rid = c.post("/api/rehearsals", json={"repo_path": str(SAMPLE), "mode": "open_book", "no_time_limit": True}).json()["rehearsal_id"]
+    rid = c.post("/api/rehearsals", json={"repo_path": str(SAMPLE), "count": 5, "mode": "open_book", "no_time_limit": True}).json()["rehearsal_id"]
     q = c.post(f"/api/rehearsals/{rid}/next").json()["question"]
     assert q["seconds"] == 0 and q["remaining_sec"] is None
 

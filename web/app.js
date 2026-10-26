@@ -423,8 +423,8 @@ $("#btn-rh-resume").onclick = () => openRehearsal(state.session.session_id)
 
 $("#btn-standalone").onclick = () => {
   const f = $("#form-standalone");
-  if (!f.count.value) f.count.value = 5;
-  if (!f.seconds.value) f.seconds.value = 180;
+  if (!f.count.value) f.count.value = 6;
+  if (!f.seconds.value) f.seconds.value = 300;
   show("standalone");
 };
 

@@ -1,4 +1,4 @@
-"""CLI: python -m mockdrill rehearse --repo <path> [--count 5] [--seconds 180] [--open-book] [--purpose "..."]
+"""CLI: python -m mockdrill rehearse --repo <path> [--count 6] [--seconds 300] [--open-book] [--purpose "..."]
 
 터미널에서는 붙여넣기를 막을 수 없다. 답변은 여러 줄로 입력하고 '.'만 있는 줄로 끝낸다.
 시간이 끝나면 그때까지 Enter로 입력한 줄까지 제출된다.
