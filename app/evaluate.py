@@ -191,7 +191,7 @@ def evaluate(session_id: str) -> dict:
         secret_scan=json.dumps(submission.get("secret_findings", []), ensure_ascii=False))
     intent_prompt = prompts.load(
         "eval_intent", readme=problem.readme_markdown, facts_with_discovery=facts_text(sealed, disc),
-        chat=chat_text(chat, with_judgment=True), agent_prompts=prompts_text(process),
+        duration_text=prompts.duration_text(s.duration_min), chat=chat_text(chat, with_judgment=True), agent_prompts=prompts_text(process),
         commits=commits_text(process), metrics=json.dumps(m, ensure_ascii=False, indent=1), docs=docs_text(docs))
     cons_docs = dict(docs)
     readme_ws = ctx.read("README.md")

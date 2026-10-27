@@ -80,8 +80,16 @@ def test_render_vars_and_missing():
 def test_generate_prompt_has_no_unfilled_vars():
     text = prompts.load("generate_problem", domain="d", archetype="a", archetype_description="ad",
                         difficulty="easy", fact_count=6, conflict_count=0, constraint_count=1,
-                        data_file_count=0, trap_count=2, example_readme="ex", retry_feedback="")
+                        data_file_count=0, trap_count=2, example_readme="ex", retry_feedback="",
+                        duration_text="3시간")
     assert "{{" not in text
+    assert "3시간" in text and "4시간" not in text
+
+
+def test_duration_text():
+    assert prompts.duration_text(180) == "3시간"
+    assert prompts.duration_text(150) == "2시간 30분"
+    assert prompts.duration_text(45) == "45분"
 
 
 # ---------- README 노출 검사 / 출력 검증 ----------

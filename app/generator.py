@@ -129,6 +129,7 @@ def generate(choice: dict) -> GeneratedProblem:
             constraint_count=choice["constraint"],
             data_file_count=choice["data_files"],
             trap_count=choice["traps"],
+            duration_text=prompts.duration_text(settings.duration_min),
             example_readme=(prompts.PROMPT_DIR / "example_readme.md").read_text(encoding="utf-8"),
             retry_feedback=feedback,
         )
