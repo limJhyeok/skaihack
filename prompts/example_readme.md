@@ -24,4 +24,4 @@
 
 ## 실행 환경
 
-결과물은 샌드박스에서 실행되는 웹서비스입니다. OpenAI API는 `OPENAI_API_KEY`, `OPENAI_BASE_URL` 환경변수로 제공됩니다. 키를 코드에 직접 쓰거나 Git에 커밋하지 마세요.
+결과물은 로컬(localhost)에서 실행되는 웹서비스입니다. 인터넷 연결과 라이브러리 설치에는 제한이 없습니다. OpenAI API는 `OPENAI_API_KEY`, `OPENAI_BASE_URL` 환경변수로 제공됩니다. 키를 코드에 직접 쓰거나 Git에 커밋하지 마세요.
