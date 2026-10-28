@@ -11,4 +11,5 @@
 {{user_questions}}
 
 fact_id는 위 id를 그대로 쓴다. closest_user_question은 위 질문 원문을 그대로 쓴다.
+모든 문장형 텍스트 값은 한국어로 쓴다. 코드 식별자·파일명·경로·인용문은 원문 그대로 둔다.
 JSON 스키마로만 출력한다.
