@@ -168,7 +168,7 @@ def evaluate(session_id: str) -> dict:
     reh = rehearsal.load(session_id) if rehearsal.exists(session_id) else None
 
     # 1) 자동 실행 (포트 사용 중이면 PortBusy가 그대로 올라감)
-    run = runner.run_app(d / "snapshot.tar.gz", s.run_command or "", s.app_port or 8000, d)
+    run = runner.run_app(d / "snapshot.tar.gz", s.run_command, s.app_port, d)
     (d / "run_result.json").write_text(json.dumps(run, ensure_ascii=False, indent=2), encoding="utf-8")
 
     # 2) 정량 지표

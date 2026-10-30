@@ -30,7 +30,7 @@ DIFFICULTY = {
 }
 
 README_SECTIONS = ["상황", "현업의 요청", "현업 파트너", "과제", "실행 환경"]
-README_LEN = (400, 1200)
+README_LEN = (400, 1300)
 MAX_ATTEMPTS = 3  # 최초 1회 + 재생성 2회
 
 

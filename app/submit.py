@@ -10,7 +10,6 @@ from . import collector, sessions, timer
 from .schemas import Session
 
 EXCLUDE_DIRS = {".git", "node_modules", ".venv", "venv", "__pycache__"}
-DEFAULT_COMMAND = "uv run uvicorn main:app --host 0.0.0.0 --port 8000"
 
 SECRET_PATTERNS = [
     ("openai_key", re.compile(r"sk-[A-Za-z0-9_\-]{16,}")),
@@ -37,11 +36,15 @@ NOT_SERVER = re.compile(r"\b(test|check|lint|build|install|format|typecheck|pyte
 SERVER_HINT = re.compile(r"\b(start|dev|serve|server|app|main)\b")
 
 
-def suggest_command(ws: Path) -> tuple[str, int]:
-    """작업공간 README에서 실행 명령과 포트를 찾아 제안. 없으면 기본값."""
+PORT_IN_CMD = re.compile(r"(?:--port[ =]|-p[ =]?|:)(\d{4,5})\b")
+PORT_IN_TEXT = re.compile(r"(?:localhost|127\.0\.0\.1|0\.0\.0\.0):(\d{4,5})\b|(?:포트|port)\s*[:=]?\s*`?(\d{4,5})\b", re.I)
+
+
+def readme_command(ws: Path) -> tuple[str | None, int | None]:
+    """작업공간 README에서 실행 명령과 포트를 찾는다. 실전처럼 제출 때 따로 입력받지 않으므로 기본값을 채우지 않는다."""
     readme = ws / "README.md"
     text = readme.read_text(encoding="utf-8", errors="replace") if readme.exists() else ""
-    best, best_rank = DEFAULT_COMMAND, -1
+    best, best_rank = None, -1
     for line in text.splitlines():
         s = line.strip().strip("`").removeprefix("$ ").strip()
         if not RUN_LINE.match(s) or NOT_SERVER.search(s):
@@ -49,9 +52,9 @@ def suggest_command(ws: Path) -> tuple[str, int]:
         rank = 2 if ("uvicorn" in s or "streamlit" in s or "--port" in s) else 1 if SERVER_HINT.search(s) else 0
         if rank > best_rank:  # 같은 순위면 먼저 나온 명령
             best, best_rank = s, rank
-    m = re.search(r"(?:--port[ =]|:)(\d{4,5})\b", best) or \
-        re.search(r"(?:localhost|127\.0\.0\.1|0\.0\.0\.0):(\d{4,5})\b", text)
-    return best, int(m.group(1)) if m else 8000
+    m = (best and PORT_IN_CMD.search(best)) or PORT_IN_TEXT.search(text)
+    port = next((int(g) for g in m.groups() if g), None) if m else None
+    return best, port
 
 
 def _excluded(rel: Path) -> bool:
@@ -101,8 +104,7 @@ def scan_secrets(ws: Path, files: list[str]) -> list[dict]:
     return findings
 
 
-def submit(session: Session, run_command: str, app_port: int, agent_tool: str,
-           auto_commit: bool, manual_tokens: int | None) -> dict:
+def submit(session: Session, agent_tool: str, auto_commit: bool, manual_tokens: int | None) -> dict:
     ws = Path(session.workspace_path)
     d = sessions.session_dir(session.session_id)
     dirty = dirty_files(ws)
@@ -112,6 +114,7 @@ def submit(session: Session, run_command: str, app_port: int, agent_tool: str,
         _git(ws, "commit", "-q", "-m", "submission snapshot")
         committed = True
     _git(ws, "tag", "-f", "submission")
+    run_command, app_port = readme_command(ws)  # 커밋 뒤 README 기준 (실전은 실행 명령·포트를 입력받지 않음)
     files = snapshot(ws, d / "snapshot.tar.gz")
     secrets = scan_secrets(ws, files)
 
@@ -124,6 +127,8 @@ def submit(session: Session, run_command: str, app_port: int, agent_tool: str,
         "dirty_files_at_submit": dirty,
         "auto_committed": committed,
         "tag": "submission",
+        "run_command": run_command,
+        "app_port": app_port,
         "snapshot_files": files,
         "secret_findings": secrets,
         "commit_count": len(process["commits"]),

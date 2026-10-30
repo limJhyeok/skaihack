@@ -23,10 +23,27 @@ class PortBusy(RuntimeError):
     pass
 
 
-def _port_open(port: int) -> bool:
+def _port_open(port: int, host: str = "127.0.0.1") -> bool:
     with socket.socket() as s:
         s.settimeout(0.5)
-        return s.connect_ex(("127.0.0.1", port)) == 0
+        return s.connect_ex((host, port)) == 0
+
+
+def _lan_ip() -> str | None:
+    """루프백이 아닌 이 기기의 IP. UDP connect는 패킷을 보내지 않고 경로만 정한다."""
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+            s.connect(("10.255.255.255", 1))
+            ip = s.getsockname()[0]
+    except OSError:
+        return None
+    return None if ip.startswith("127.") else ip
+
+
+def _bound_all_interfaces(port: int) -> bool | None:
+    """실전 응시 환경의 브라우저 미리보기는 0.0.0.0 바인딩이어야 접근된다. 확인할 IP가 없으면 None."""
+    ip = _lan_ip()
+    return None if ip is None else _port_open(port, ip)
 
 
 def _mask(text: str) -> str:
@@ -78,16 +95,25 @@ def _screenshot(url: str, out: Path) -> str | None:
         return None
 
 
-def run_app(snapshot_tar: Path, run_command: str, port: int, out_dir: Path) -> dict:
-    """스냅샷을 새로 풀어 실행하고 루트 페이지를 확인한다. 실행 디렉터리는 끝나면 지운다."""
-    if _port_open(port):
+def run_app(snapshot_tar: Path, run_command: str | None, port: int | None, out_dir: Path) -> dict:
+    """스냅샷을 새로 풀어 실행하고 루트 페이지를 확인한다. 실행 디렉터리는 끝나면 지운다.
+    실행 명령·포트는 제출 때 README에서 읽은 값이며, 못 찾았으면 실행하지 않고 실패로 기록한다."""
+    if run_command and port and _port_open(port):
         raise PortBusy(f"포트 {port}가 이미 사용 중입니다. 실행 중인 서버를 끄고 다시 평가하세요.")
     work = Path(tempfile.mkdtemp(prefix="mockrun_"))
     app_dir = codectx.extract_snapshot(snapshot_tar, work / "app")
     log_path = out_dir / "run.log"
     result: dict = {"command": run_command, "port": port, "started": False, "exit_code": None,
                     "startup_sec": None, "http_status": None, "content_type": None, "body_head": None,
-                    "error": None, "screenshot": None}
+                    "error": None, "screenshot": None, "bound_all_interfaces": None}
+    if not run_command or not port:
+        missing = " · ".join(n for n, v in (("실행 명령", run_command), ("포트", port)) if not v)
+        result["error"] = f"README에서 {missing}을(를) 찾지 못함 (실전은 제출 때 따로 입력하지 않음)"
+        work = Path(tempfile.mkdtemp(prefix="mockrun_"))
+        result["log_tail"] = ""
+        result["tests"] = run_tests(codectx.extract_snapshot(snapshot_tar, work / "app"))
+        shutil.rmtree(work, ignore_errors=True)
+        return result
     t0 = time.monotonic()
     with open(log_path, "w", encoding="utf-8") as log:
         proc = subprocess.Popen(run_command, shell=True, cwd=app_dir, env=_env(), stdout=log,
@@ -101,6 +127,7 @@ def run_app(snapshot_tar: Path, run_command: str, port: int, out_dir: Path) -> d
                 if _port_open(port):
                     result["started"] = True
                     result["startup_sec"] = round(time.monotonic() - t0, 1)
+                    result["bound_all_interfaces"] = _bound_all_interfaces(port)
                     break
                 time.sleep(0.5)
             else:

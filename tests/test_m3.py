@@ -134,18 +134,29 @@ def submitted(tmp_path):
     _set(sid, workspace_path=str(ws))
     c = TestClient(app)
     info = c.get(f"/api/sessions/{sid}/submit-info").json()
-    r = c.post(f"/api/sessions/{sid}/submit", json={
-        "run_command": info["suggested_command"], "app_port": info["suggested_port"], "auto_commit": True})
+    r = c.post(f"/api/sessions/{sid}/submit", json={"auto_commit": True})
     assert r.status_code == 200, r.text
     yield sid, ws, info, r.json()
     collector.save_log_paths({})
 
 
-def test_submit_info_suggests_from_readme(submitted):
-    _, _, info, _ = submitted
-    assert info["suggested_command"] == "uv run uvicorn main:app --port 8123"
-    assert info["suggested_port"] == 8123
+def test_submit_reads_run_command_from_readme(submitted):
+    """실전은 제출 때 실행 명령·포트를 입력받지 않는다 → README에서 읽은 값이 세션에 저장된다."""
+    sid, _, info, res = submitted
+    assert info["readme_command"] == "uv run uvicorn main:app --port 8123"
+    assert info["readme_port"] == 8123
     assert "main.py" in info["dirty_files"]
+    s = sessions.load_session(sid)
+    assert (s.run_command, s.app_port) == (res["run_command"], res["app_port"]) == (info["readme_command"], 8123)
+
+
+def test_readme_without_command_or_port_has_no_default(tmp_path):
+    (tmp_path / "README.md").write_text("# 앱\n실행 방법은 추후 작성\n")
+    assert submit.readme_command(tmp_path) == (None, None)
+    (tmp_path / "README.md").write_text("```\nnpm start\n```\n")
+    assert submit.readme_command(tmp_path) == ("npm start", None)
+    (tmp_path / "README.md").write_text("```\nnpm start\n```\n포트: 3000 으로 열립니다\n")
+    assert submit.readme_command(tmp_path) == ("npm start", 3000)
 
 
 def test_suggest_prefers_server_command_over_check(tmp_path):
@@ -153,7 +164,7 @@ def test_suggest_prefers_server_command_over_check(tmp_path):
     (tmp_path / "README.md").write_text(
         "```bash\nnpm run demo\nnpm start\nnpm run dev\n```\n브라우저에서 http://127.0.0.1:3000 에 접속\n"
         "```bash\nnpm test\nnpm run check\nnpm ci\n```\n")
-    assert submit.suggest_command(tmp_path) == ("npm start", 3000)
+    assert submit.readme_command(tmp_path) == ("npm start", 3000)
 
 
 def test_secret_scan_ignores_test_placeholder_values(tmp_path):
@@ -196,5 +207,5 @@ def test_missing_agent_logs_marked_not_collected(submitted):
 
 def test_cannot_submit_twice(submitted):
     sid, *_ = submitted
-    r = TestClient(app).post(f"/api/sessions/{sid}/submit", json={"run_command": "x", "app_port": 1})
+    r = TestClient(app).post(f"/api/sessions/{sid}/submit", json={"auto_commit": True})
     assert r.status_code == 409

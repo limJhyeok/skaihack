@@ -167,14 +167,12 @@ def _require_practice(session_id: str) -> Session:
 def submit_info(session_id: str):
     s = _load(session_id)
     ws = Path(s.workspace_path)
-    cmd, port = submit.suggest_command(ws)
-    return {"suggested_command": cmd, "suggested_port": port, "dirty_files": submit.dirty_files(ws),
+    cmd, port = submit.readme_command(ws)
+    return {"readme_command": cmd, "readme_port": port, "dirty_files": submit.dirty_files(ws),
             "status": s.status}
 
 
 class SubmitRequest(BaseModel):
-    run_command: str
-    app_port: int
     agent_tool: Literal["codex", "claude_code", "other"] = "codex"
     auto_commit: bool = True
     manual_tokens: int | None = None
@@ -185,11 +183,9 @@ def do_submit(session_id: str, req: SubmitRequest):
     s = _load(session_id)
     if s.status != "running":
         raise HTTPException(409, "응시 중인 세션만 제출할 수 있습니다.")
-    if not req.run_command.strip():
-        raise HTTPException(400, "실행 명령을 입력하세요.")
     if s.mode == "practice" and timer.state(s)["paused"]:
         timer.log_event(s, "resume")
-    return submit.submit(s, req.run_command.strip(), req.app_port, req.agent_tool, req.auto_commit, req.manual_tokens)
+    return submit.submit(s, req.agent_tool, req.auto_commit, req.manual_tokens)
 
 
 @app.get("/api/sessions/{session_id}/submission")

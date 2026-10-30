@@ -14,7 +14,7 @@
 2. requirement_fulfillment (요구사항 충족도): 합의 범위와 응시자가 발견한 요구를 충족했는가. 발견하지 못한 요구는 여기서 감점하지 않고 별도로 표시만 한다
 3. functional_correctness (기능적 정확성): 실행·테스트 결과 실제로 동작하는가
 4. practical_quality_risk (실무적 품질 위험): 오류 처리, 보안, 키 처리, 과설계(함정 목록 또는 요구에 없는 복잡도)
-5. deliverable_completeness (제출물 완성도): 실행 방법, 문서, 설명 없이 쓸 수 있는 UI
+5. deliverable_completeness (제출물 완성도): 실행 방법, 문서, 설명 없이 쓸 수 있는 UI. 실행 명령·포트는 제출 때 따로 입력받지 않고 README에서만 읽으므로, README에 정확한 실행 명령과 포트가 없으면 이 항목의 약점이다. 자동 실행 결과의 bound_all_interfaces가 false면 서버가 127.0.0.1에만 열려 실전 응시 환경의 브라우저 미리보기에서 열리지 않으므로 functional_correctness와 이 항목에 약점으로 적는다 (null이면 확인 못 함, 언급하지 않음).
 
 마지막에 strengths(2개), improvements(3개, 구체적 행동)를 쓴다.
 

@@ -313,8 +313,7 @@ $("#btn-submit-cancel").onclick = () => enterExam(state.session);
 async function openSubmit(timeOver) {
   const info = await api(`/api/sessions/${state.session.session_id}/submit-info`);
   const f = $("#form-submit");
-  if (!f.run_command.value) f.run_command.value = info.suggested_command;
-  if (!f.app_port.value) f.app_port.value = info.suggested_port;
+  $("#readme-run").textContent = `${info.readme_command ?? "실행 명령 없음"} (포트 ${info.readme_port ?? "없음"})`;
   $("#dirty-box").classList.toggle("hidden", !info.dirty_files.length);
   $("#dirty-list").textContent = info.dirty_files.join("\n");
   $("#submit-timeover").classList.toggle("hidden", !timeOver);
@@ -330,8 +329,6 @@ $("#form-submit").onsubmit = async (e) => {
   $("#submit-status").textContent = "제출 중… (스냅샷·로그 수집)";
   try {
     await post(`/api/sessions/${state.session.session_id}/submit`, {
-      run_command: f.run_command.value,
-      app_port: Number(f.app_port.value),
       agent_tool: f.agent_tool.value,
       auto_commit: f.auto_commit.checked,
       manual_tokens: f.manual_tokens.value ? Number(f.manual_tokens.value) : null,
@@ -712,8 +709,10 @@ function renderReport(rep) {
   const run = t.run;
   tech.append(el("h3", "", "자동 실행"));
   tech.append(kvList([
-    ["실행 명령", `${run.command} (포트 ${run.port})`],
+    ["실행 명령 (README)", `${run.command ?? "없음"} (포트 ${run.port ?? "없음"})`],
     ["결과", run.started ? `기동 ${run.startup_sec}초, GET / → ${run.http_status ?? "응답 없음"}` : `실패: ${run.error}`],
+    ["0.0.0.0 바인딩", run.bound_all_interfaces == null ? "확인 안 됨"
+      : run.bound_all_interfaces ? "예" : "아니오: 127.0.0.1에만 열림 → 실전 브라우저 미리보기에서 열리지 않음"],
     ["테스트", run.tests.found ? `${run.tests.command} → exit ${run.tests.exit_code}` : "테스트 없음"],
     ["스크린샷", run.screenshot ? "저장됨 (data/sessions/…/screenshot.png)" : "없음 (Playwright 미설치)"],
     ["비밀키 검사", t.secret_findings.length ? t.secret_findings.map((f) => `${f.file}:${f.line ?? "-"} ${f.kind}`).join(", ") : "발견 없음"],

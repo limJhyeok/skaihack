@@ -39,6 +39,23 @@ def test_run_app_success(tmp_path):
     assert r["tests"]["found"] is False
 
 
+def test_run_app_flags_loopback_only_bind(tmp_path):
+    """실전 브라우저 미리보기는 0.0.0.0 바인딩이어야 열린다."""
+    if runner._lan_ip() is None:
+        pytest.skip("루프백 외 IP 없음")
+    tar = _snapshot(tmp_path, {"index.html": "x"})
+    port = _free_port()
+    assert runner.run_app(tar, f"python3 -m http.server {port} --bind 127.0.0.1", port, tmp_path)["bound_all_interfaces"] is False
+    port = _free_port()
+    assert runner.run_app(tar, f"python3 -m http.server {port} --bind 0.0.0.0", port, tmp_path)["bound_all_interfaces"] is True
+
+
+def test_run_app_without_readme_command_fails_without_running(tmp_path):
+    tar = _snapshot(tmp_path, {"index.html": "x"})
+    r = runner.run_app(tar, None, None, tmp_path)
+    assert not r["started"] and "README" in r["error"] and r["tests"]["found"] is False
+
+
 def test_run_app_wrong_command_logs_error(tmp_path):
     tar = _snapshot(tmp_path, {"main.py": "print('x')"})
     port = _free_port()
