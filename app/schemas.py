@@ -141,6 +141,38 @@ class GradeOutput(BaseModel):
     comment: str
 
 
+# ---------- 추적 카드 드릴 (docs/drill_design.md) ----------
+
+class CardSlot(BaseModel):
+    id: str                                  # "s1"…
+    prompt: str
+    kind: Literal["choice", "value"]
+    options: list[str]                       # choice일 때 2~4개, value면 빈 배열
+    claimed: str                             # 출제자가 예상한 정답 (실행 관찰값과 대조)
+
+
+class GeneratedCard(BaseModel):
+    id: str
+    context: str                             # 기능 흐름 안내 (사용자 행동 → 결과, 용어 풀이). 정답을 정하는 처리는 쓰지 않음
+    scenario: str
+    slots: list[CardSlot]
+    evidence: list[str]                      # "파일:줄"
+    explanation: str
+    defect_tags: list[str]
+    probe: str
+
+
+class GeneratedDeck(BaseModel):
+    cards: list[GeneratedCard]
+
+
+class CardRepair(BaseModel):
+    action: Literal["fix_probe", "accept_observed", "drop"]
+    probe: str | None
+    explanation: str | None
+    reason: str
+
+
 # ---------- 평가 리포트 (5.9, 6.6, 6.7, 6.7-1, 6.8) ----------
 
 Verdict = Literal["충족", "부분충족", "미충족"]

@@ -8,7 +8,7 @@ from pydantic import BaseModel
 import json
 from pathlib import Path
 
-from . import collector, dashboard, evaluate, generator, helper, persona, rehearsal, reveal, runner, sessions, submit, timer, workspace
+from . import cards, collector, dashboard, evaluate, generator, helper, persona, rehearsal, reveal, runner, sessions, submit, timer, workspace
 from .config import APP_ROOT, settings
 from .llm import LLMError
 from .schemas import Difficulty, GeneratedProblem, ProblemPublic, Sealed, Session
@@ -285,6 +285,90 @@ def _rehearsal_call(fn):
     try:
         return fn()
     except rehearsal.RehearsalError as e:
+        raise HTTPException(409, str(e))
+    except LLMError as e:
+        raise HTTPException(502, str(e))
+
+
+# ---------- 동작 추적 카드 드릴 (docs/drill_design.md) ----------
+
+class DeckCreate(BaseModel):
+    session_id: str
+    count: int = cards.DEFAULT_CARDS
+
+
+class RunCreate(BaseModel):
+    mode: Literal["closed", "open"] = "closed"
+    count: int = 10
+    session_id: str | None = None
+
+
+class CardAnswer(BaseModel):
+    answers: dict[str, str]
+    timed_out: bool = False
+
+
+@app.get("/api/drills/sources")
+def drill_sources():
+    return {"sources": cards.sources(), "decks": cards.deck_list(), "runs": cards.list_runs()}
+
+
+@app.post("/api/drills/decks")
+def create_deck(req: DeckCreate):
+    _load(req.session_id)
+    if not 3 <= req.count <= 12:
+        raise HTTPException(400, "카드 수는 3~12입니다.")
+    deck = _card_call(lambda: cards.generate_deck(req.session_id, req.count))
+    return {k: deck[k] for k in ("deck_id", "generation")}
+
+
+@app.post("/api/drills/runs")
+def create_run(req: RunCreate):
+    if not 1 <= req.count <= 30:
+        raise HTTPException(400, "카드 수는 1~30입니다.")
+    return _card_call(lambda: cards.run_view(cards.create_run(req.mode, req.count, req.session_id)))
+
+
+@app.get("/api/drills/runs/{run_id}")
+def get_run(run_id: str):
+    return cards.run_view(_load_run(run_id))
+
+
+@app.post("/api/drills/runs/{run_id}/cards/{n}/start")
+def start_card(run_id: str, n: int):
+    _load_run(run_id)
+    return _card_call(lambda: cards.start_item(run_id, n))
+
+
+@app.post("/api/drills/runs/{run_id}/cards/{n}/answer")
+def answer_card(run_id: str, n: int, req: CardAnswer):
+    _load_run(run_id)
+    return _card_call(lambda: cards.answer(run_id, n, req.answers, req.timed_out))
+
+
+@app.get("/api/drills/runs/{run_id}/cards/{n}/result")
+def card_result(run_id: str, n: int):
+    run = _load_run(run_id)
+    return _card_call(lambda: cards.result_view(run, cards._item(run, n)))
+
+
+@app.post("/api/drills/runs/{run_id}/cards/{n}/flag")
+def flag_card(run_id: str, n: int):
+    _load_run(run_id)
+    return _card_call(lambda: cards.flag(run_id, n))
+
+
+def _load_run(run_id: str) -> dict:
+    try:
+        return cards.load_run(run_id)
+    except (FileNotFoundError, ValueError):
+        raise HTTPException(404, "드릴을 찾을 수 없습니다.")
+
+
+def _card_call(fn):
+    try:
+        return fn()
+    except cards.CardError as e:
         raise HTTPException(409, str(e))
     except LLMError as e:
         raise HTTPException(502, str(e))

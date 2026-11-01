@@ -111,3 +111,18 @@ details pre { white-space:pre-wrap; background:var(--bg); border:1px solid var(-
   padding:8px 10px; font-size:12px; line-height:1.6; white-space:nowrap; display:none; }
 .viz-tip i { display:inline-block; width:10px; height:2px; vertical-align:middle; margin-right:6px; }
 .tip-row { background:var(--panel); border-left:3px solid #ffb84d; padding:8px 12px; margin:8px 0; border-radius:4px; }
+.card-layout { display:grid; grid-template-columns:minmax(0,1fr); gap:20px; align-items:start; }
+.card-layout.open { grid-template-columns:minmax(0,3fr) minmax(0,2fr); }
+.slot { background:var(--panel); border:1px solid var(--line); border-radius:8px; padding:10px 14px; margin:10px 0; }
+.slot p { margin:0 0 6px; }
+.slot label { display:flex; flex-direction:row; gap:8px; align-items:center; color:var(--text); }
+.slot.ok { border-color:#3fbf6f; } .slot.bad { border-color:#ff5c5c; }
+.slot .ans { font-size:14px; margin-top:6px; }
+.snip { background:var(--bg); border:1px solid var(--line); border-radius:6px; margin:10px 0; overflow:auto; max-height:560px; }
+.snip-h { font:12px monospace; color:var(--muted); padding:4px 8px; border-bottom:1px solid var(--line); position:sticky; top:0; background:var(--panel); }
+.snip pre { margin:0; font:12.5px/1.5 ui-monospace, monospace; }
+.snip .ln { display:block; white-space:pre; padding:0 8px; }
+.snip .ln i { display:inline-block; width:3.2em; color:var(--muted); font-style:normal; user-select:none; }
+.snip .ln.hit { background:rgba(79,140,255,.18); }
+.surprise { border-left:3px solid #ffb84d; padding-left:10px; }
+.context { color:var(--muted); background:var(--panel); border-left:3px solid var(--accent); padding:8px 12px; border-radius:4px; margin:8px 0; }

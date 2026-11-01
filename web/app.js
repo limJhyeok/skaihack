@@ -1012,10 +1012,270 @@ $("#form-settings").onsubmit = async (e) => {
   $("#settings-status").textContent = "저장했습니다.";
 };
 
+// ---------- 동작 추적 카드 드릴 (docs/drill_design.md) ----------
+
+const dc = { run: null, n: null, deadline: null, tick: null, sending: false };
+
+$("#btn-drill").onclick = openDrillSetup;
+$("#btn-ds-setup").onclick = openDrillSetup;
+
+async function openDrillSetup() {
+  location.hash = "drill";
+  clearInterval(dc.tick);
+  show("drill-setup");
+  const d = await api("/api/drills/sources");
+  const tb = $("#drill-sources");
+  tb.innerHTML = "";
+  const sel = $("#form-run").session_id;
+  sel.length = 1;
+  for (const s of d.sources) {
+    const tr = el("tr");
+    tr.append(el("td", "", s.label), el("td", "", s.runnable ? "가능" : "불가 (Python 아님)"), el("td", "", `${s.cards}장`));
+    const td = el("td");
+    if (s.runnable) {
+      const b = el("button", "", s.cards ? "카드 더 만들기" : "카드 만들기");
+      b.onclick = () => generateDeck(s, b);
+      td.append(b);
+    }
+    tr.append(td);
+    tb.append(tr);
+    if (s.cards) sel.add(new Option(`${s.label} — ${s.cards}장`, s.session_id));
+  }
+  const rb = $("#drill-runs");
+  rb.innerHTML = "";
+  for (const r of d.runs) {
+    const tr = el("tr");
+    const pct = (v) => (v == null ? "-" : `${v}%`);
+    tr.append(el("td", "", r.run_id), el("td", "", r.mode === "open" ? "코드 보고" : "코드 닫고"),
+      el("td", "", `${r.done} / ${r.total}`), el("td", "", pct(r.card_rate)), el("td", "", pct(r.slot_rate)));
+    const td = el("td");
+    const b = el("button", "", r.status === "done" ? "보기" : "이어하기");
+    b.onclick = () => openRun(r.run_id);
+    td.append(b);
+    tr.append(td);
+    rb.append(tr);
+  }
+}
+
+async function generateDeck(s, btn) {
+  btn.disabled = true;
+  try {
+    const r = await withProgress($("#drill-gen-status"), `${s.label}: 카드 출제 → 실행 검증 중… (보통 2~5분)`,
+      post("/api/drills/decks", { session_id: s.session_id }));
+    const g = r.generation;
+    await openDrillSetup();
+    $("#drill-gen-status").textContent = `카드 ${g.requested}장 출제 → 실행 검증 통과 ${g.verified}장 (폐기 ${g.dropped.length}장)`;
+  } catch (err) {
+    $("#drill-gen-status").textContent = `생성 실패: ${err.message}`;
+    btn.disabled = false;
+  }
+}
+
+$("#form-run").onsubmit = async (e) => {
+  e.preventDefault();
+  const f = e.target;
+  try {
+    const r = await post("/api/drills/runs", {
+      mode: f.mode.value, count: Number(f.count.value), session_id: f.session_id.value || null });
+    await openRun(r.run_id);
+  } catch (err) {
+    $("#drill-run-status").textContent = err.message;
+  }
+};
+
+async function openRun(runId) {
+  const r = await api(`/api/drills/runs/${runId}`);
+  dc.run = r;
+  location.hash = `run=${runId}`;
+  if (r.current === null) return showRunSummary(r);
+  const q = await post(`/api/drills/runs/${runId}/cards/${r.current}/start`, {});
+  showCard(q);
+}
+
+function codeBlock(file, lines, startLabel) {
+  const wrap = el("div", "snip");
+  wrap.append(el("div", "snip-h", startLabel || file));
+  const pre = el("pre");
+  for (const l of lines) {
+    const line = el("span", `ln${l.hit ? " hit" : ""}`);
+    line.append(el("i", "", String(l.n)), document.createTextNode(l.text));
+    pre.append(line);
+  }
+  wrap.append(pre);
+  return wrap;
+}
+
+function showCard(q) {
+  dc.n = q.n;
+  const open = dc.run.mode === "open";
+  $("#dc-progress").textContent = `카드 ${q.n} / ${q.total}`;
+  $("#dc-source").textContent = `재료: ${q.source_label} · ${open ? "코드 보고" : "코드 닫고"}`;
+  $("#dc-context").textContent = q.context ? `기능 흐름: ${q.context}` : "";
+  $("#dc-scenario").textContent = `상황: ${q.scenario}`;
+  $("#dc-layout").classList.toggle("open", open);
+  const code = $("#dc-code");
+  code.innerHTML = "";
+  code.classList.toggle("hidden", !open);
+  if (open) q.code.forEach((f) => code.append(codeBlock(f.file, f.lines)));
+  const form = $("#form-card");
+  form.innerHTML = "";
+  form.classList.remove("hidden");
+  for (const s of q.slots) {
+    const box = el("div", "slot");
+    box.append(el("p", "", s.prompt));
+    if (s.kind === "choice") {
+      for (const o of s.options) {
+        const lab = el("label");
+        const inp = el("input");
+        inp.type = "radio"; inp.name = s.id; inp.value = o;
+        lab.append(inp, o);
+        box.append(lab);
+      }
+    } else {
+      const inp = el("input");
+      inp.name = s.id; inp.autocomplete = "off"; inp.placeholder = "값 (숫자·상태 코드·짧은 토큰)";
+      box.append(inp);
+    }
+    form.append(box);
+  }
+  const row = el("div", "row");
+  const b = el("button", "primary", "제출");
+  b.type = "submit";
+  row.append(b);
+  form.append(row);
+  $("#dc-status").textContent = "";
+  $("#dc-result").innerHTML = "";
+  clearInterval(dc.tick);
+  dc.deadline = q.remaining_sec == null ? null : Date.now() + q.remaining_sec * 1000;
+  renderCardTimer();
+  dc.tick = setInterval(renderCardTimer, 500);
+  show("drill-card");
+}
+
+function renderCardTimer() {
+  if (dc.deadline === null) { $("#dc-timer").textContent = ""; return; }
+  const left = Math.max(0, Math.ceil((dc.deadline - Date.now()) / 1000));
+  $("#dc-timer").textContent = `${Math.floor(left / 60)}:${pad(left % 60)}`;
+  $("#dc-timer").classList.toggle("low", left <= 15 && left > 0);
+  $("#dc-timer").classList.toggle("over", left === 0);
+  if (left === 0) submitCard(true);
+}
+
+$("#form-card").onsubmit = (e) => { e.preventDefault(); submitCard(false); };
+
+async function submitCard(timedOut) {
+  if (dc.sending || dc.n === null) return;
+  dc.sending = true;
+  clearInterval(dc.tick);
+  const form = $("#form-card");
+  const answers = {};
+  for (const s of form.querySelectorAll(".slot")) {
+    const checked = s.querySelector("input[type=radio]:checked");
+    const text = s.querySelector("input:not([type=radio])");
+    const name = (checked || text || s.querySelector("input")).name;
+    answers[name] = checked ? checked.value : text ? text.value : "";
+  }
+  try {
+    const r = await post(`/api/drills/runs/${dc.run.run_id}/cards/${dc.n}/answer`, { answers, timed_out: timedOut });
+    showCardResult(r);
+  } catch (err) {
+    $("#dc-status").textContent = `제출 실패: ${err.message}`;
+  } finally {
+    dc.sending = false;
+  }
+}
+
+function showCardResult(r) {
+  clearInterval(dc.tick);
+  dc.n = null;
+  $("#dc-timer").textContent = r.timed_out ? "시간 초과" : `${r.elapsed_sec}초`;
+  $("#dc-progress").textContent = `카드 ${r.n} / ${r.total} — ${r.all_correct ? "맞음" : "틀림"}`;
+  $("#dc-context").textContent = r.context ? `기능 흐름: ${r.context}` : "";
+  $("#dc-scenario").textContent = `상황: ${r.scenario}`;
+  $("#form-card").classList.add("hidden");
+  const box = $("#dc-result");
+  box.innerHTML = "";
+  for (const s of r.slots) {
+    const d = el("div", `slot ${s.correct ? "ok" : "bad"}`);
+    d.append(el("p", "", `${s.correct ? "✓" : "✗"} ${s.prompt}`));
+    d.append(el("div", "ans", `내 답: ${s.mine || "(빈 답)"}`), el("div", "ans", `실행 결과: ${s.answer}`));
+    box.append(d);
+  }
+  if (r.surprise) box.append(el("p", "surprise", "출제자(AI)도 예상을 틀렸던 카드입니다. 실행 결과가 직관과 다릅니다."));
+  box.append(el("h3", "", "왜 그렇게 동작하나"), el("p", "", r.explanation));
+  if (r.defect_tags.length) box.append(el("p", "ev", `패턴: ${r.defect_tags.join(", ")}`));
+  r.snippets.forEach((sn) => box.append(codeBlock(sn.file, sn.lines, `${sn.file}:${sn.start}-${sn.end}`)));
+  const det = el("details");
+  det.append(el("summary", "", "검증에 쓴 probe 코드"), el("pre", "", r.probe));
+  box.append(det);
+  const row = el("div", "row");
+  const flag = el("button", "ghost", r.flagged ? "신고 취소" : "정답이 이상함");
+  flag.onclick = async () => {
+    const { flagged } = await post(`/api/drills/runs/${dc.run.run_id}/cards/${r.n}/flag`, {});
+    flag.textContent = flagged ? "신고 취소" : "정답이 이상함";
+    toast(flagged ? "이 카드는 통계와 다음 드릴에서 빠집니다." : "신고를 취소했습니다.");
+  };
+  const next = el("button", "primary", r.run_done ? "요약 보기" : "다음 카드");
+  next.onclick = () => openRun(dc.run.run_id);
+  row.append(flag, next);
+  box.append(row);
+  next.focus();
+}
+
+function showRunSummary(r) {
+  location.hash = `run=${r.run_id}`;
+  const s = r.summary;
+  const body = $("#ds-body");
+  body.innerHTML = "";
+  const row = el("div", "score-row");
+  const tile = (label, value, sub) => {
+    const t = el("div", "score");
+    t.append(el("span", "muted", label), el("b", "", value ?? "-"), el("small", "muted", sub || ""));
+    return t;
+  };
+  const pct = (v) => (v == null ? "-" : `${v}%`);
+  row.append(tile("카드 정답률", pct(s.card_rate), `${s.cards_correct} / ${s.cards}장 모두 맞음`),
+    tile("칸 정답률", pct(s.slot_rate), ""), tile("평균 시간", s.avg_sec == null ? "-" : `${s.avg_sec}초`, `시간 초과 ${s.timed_out}장`));
+  body.append(row);
+  const tags = Object.entries(s.missed_tags);
+  if (tags.length) body.append(el("p", "", "틀린 카드의 패턴: " + tags.map(([k, v]) => `${k} ${v}`).join(" · ")));
+  const t = el("table", "list");
+  t.innerHTML = "<thead><tr><th>카드</th><th>재료</th><th>결과</th><th></th></tr></thead>";
+  const tb = el("tbody");
+  for (const it of r.items) {
+    const tr = el("tr");
+    tr.append(el("td", "", String(it.n)), el("td", "", it.source_label),
+      el("td", "", (it.all_correct ? "맞음" : "틀림") + (it.flagged ? " (신고)" : "")));
+    const td = el("td");
+    const b = el("button", "", "다시 보기");
+    b.onclick = async () => { showCard0(); showCardResult(await api(`/api/drills/runs/${r.run_id}/cards/${it.n}/result`)); };
+    td.append(b);
+    tr.append(td);
+    tb.append(tr);
+  }
+  t.append(tb);
+  body.append(t);
+  show("drill-summary");
+}
+
+// 결과 다시 보기용: 카드 화면을 비운 상태로 연다
+function showCard0() {
+  $("#dc-layout").classList.remove("open");
+  $("#dc-code").classList.add("hidden");
+  $("#dc-progress").textContent = "카드 다시 보기";
+  $("#dc-source").textContent = "";
+  $("#dc-scenario").textContent = "";
+  $("#dc-context").textContent = "";
+  $("#dc-status").textContent = "";
+  show("drill-card");
+}
+
 // ---------- 시작 ----------
 
 loadOptions();
 const m = location.hash.match(/s=([\w]+)/);
 if (m) openSession(m[1]).catch(() => show("home"));
 else if (location.hash === "#dashboard") openDashboard();
+else if (location.hash.startsWith("#run=")) openRun(location.hash.slice(5)).catch(() => show("home"));
+else if (location.hash === "#drill") openDrillSetup();
 else loadSessions();
