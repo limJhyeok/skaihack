@@ -350,3 +350,24 @@ class PolicyBundleOut(BaseModel):
     policies: list[PolicyItem]
     reference_code: str
     defects: list[PolicyDefect]
+
+
+# ---------- A. 읽기·정리 드릴 채점 (docs/flow_drills_design.md 4절) ----------
+
+class ReadingPolicyJudge(BaseModel):
+    policy_id: str
+    verdict: Literal["covered", "partial", "misread", "missed"]
+    items: list[int]                         # 이 정책에 해당하는 응시자 항목 번호
+    comment: str                             # 무엇이 빠졌거나 어긋났나 (covered면 빈 문자열 가능)
+
+
+class ReadingItemJudge(BaseModel):
+    n: int
+    verdict: Literal["matched", "extra", "unsupported", "contradicts"]
+    comment: str
+
+
+class ReadingGradeOut(BaseModel):
+    policies: list[ReadingPolicyJudge]
+    items: list[ReadingItemJudge]
+    overall: str                             # 읽기 습관에 대한 한두 문장 피드백

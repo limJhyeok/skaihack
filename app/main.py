@@ -8,7 +8,7 @@ from pydantic import BaseModel
 import json
 from pathlib import Path
 
-from . import cards, collector, criteria, dashboard, evaluate, fresh, generator, helper, persona, policy, rehearsal, reveal, runner, sessions, submit, timer, workspace
+from . import cards, collector, criteria, dashboard, evaluate, fresh, generator, helper, persona, policy, reading, rehearsal, reveal, runner, sessions, submit, timer, workspace
 from .config import APP_ROOT, settings
 from .llm import LLMError
 from .schemas import Difficulty, GeneratedProblem, ProblemPublic, Sealed, Session
@@ -479,6 +479,69 @@ def _criteria_call(fn):
         return fn()
     except criteria.CriteriaError as e:
         raise HTTPException(409, str(e))
+
+
+# ---------- A. 읽기·정리 드릴 (docs/flow_drills_design.md 4절) ----------
+
+class ReadCreate(BaseModel):
+    bundle_id: str
+    seconds: int = reading.DEFAULT_SECONDS   # 0이면 시간 제한 없음
+
+
+class ReadText(BaseModel):
+    text: str
+    timed_out: bool = False
+
+
+@app.get("/api/reading")
+def reading_overview():
+    return reading.overview()
+
+
+@app.post("/api/reading/sheets")
+def create_read(req: ReadCreate):
+    if not 0 <= req.seconds <= 7200:
+        raise HTTPException(400, "시간은 0~7200초입니다.")
+    try:
+        sheet = reading.create(req.bundle_id, req.seconds)
+    except (FileNotFoundError, ValueError):
+        raise HTTPException(404, "정책 묶음을 찾을 수 없습니다.")
+    return reading.view(sheet)
+
+
+@app.get("/api/reading/sheets/{read_id}")
+def get_read(read_id: str):
+    return reading.view(_load_read(read_id))
+
+
+@app.put("/api/reading/sheets/{read_id}/text")
+def save_read_text(read_id: str, req: ReadText):
+    _load_read(read_id)
+    return _reading_call(lambda: reading.save_text(read_id, req.text))
+
+
+@app.post("/api/reading/sheets/{read_id}/submit")
+def submit_read(read_id: str, req: ReadText):
+    _load_read(read_id)
+    if not settings.model_strong:
+        raise HTTPException(500, "MOCK_MODEL_STRONG 환경변수가 설정되지 않았습니다.")
+    return _reading_call(lambda: reading.submit(read_id, req.text, req.timed_out))
+
+
+def _load_read(read_id: str) -> dict:
+    try:
+        return reading.load(read_id)
+    except (FileNotFoundError, ValueError):
+        raise HTTPException(404, "답안을 찾을 수 없습니다.")
+
+
+def _reading_call(fn):
+    try:
+        return fn()
+    except reading.ReadingError as e:
+        raise HTTPException(409, str(e))
+    except LLMError as e:
+        raise HTTPException(502, f"채점 실패 (답안은 저장됨, 다시 제출하세요): {e}")
 
 
 # ---------- 평가 리포트 / 정답 공개 ----------

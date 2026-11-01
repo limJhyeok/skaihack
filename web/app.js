@@ -1654,6 +1654,225 @@ function showCritResult(v) {
   show("crit-result");
 }
 
+// ---------- 읽기·정리 드릴 (docs/flow_drills_design.md 4절 A) ----------
+
+const rs = { sheet: null, deadline: null, tick: null, sending: false, saveTimer: null };
+
+$("#btn-reading").onclick = openReading;
+$("#btn-rr-setup").onclick = openReading;
+
+// 서버 reading.parse_items와 같은 규칙: 한 줄 = 한 항목, '#' 줄은 제목
+const countItems = (text) => text.split("\n").map((l) => l.trim())
+  .filter((l) => l && !l.startsWith("#") && l.replace(/^(?:[-*•·]|\d+[.)]|\[[ xX]?\])\s*/, "")).length;
+
+async function openReading() {
+  location.hash = "reading";
+  clearInterval(rs.tick);
+  show("read-setup");
+  const d = await api("/api/reading");
+  const tb = $("#read-bundles");
+  tb.innerHTML = "";
+  for (const b of d.bundles) {
+    const tr = el("tr");
+    const name = el("td", "", b.title);
+    name.append(el("br"), el("small", "muted", `${b.domain} · ${b.concepts.join(", ")} · ${b.doc_chars.toLocaleString()}자`));
+    tr.append(name, el("td", "", `${b.policies}개`), el("td", "", `${b.reads}회${b.seen ? " · 이미 봄" : ""}`),
+      el("td", "", pctText(b.best_recall)));
+    const td = el("td");
+    const btn = el("button", b.seen ? "" : "primary", "시작");
+    btn.onclick = () => startRead(b.bundle_id, btn);
+    td.append(btn);
+    tr.append(td);
+    tb.append(tr);
+  }
+  if (!d.bundles.length) tb.append(emptyRow(5, "아직 정책 묶음이 없습니다. 위에서 새로 만드세요."));
+  const sb = $("#read-sheets");
+  sb.innerHTML = "";
+  for (const s of d.reads) {
+    const tr = el("tr");
+    tr.append(el("td", "", s.read_id), el("td", "", s.title), el("td", "", `${s.items}개`), el("td", "", pctText(s.recall)),
+      el("td", "", s.misread ?? "-"), el("td", "", s.invented ?? "-"));
+    const td = el("td");
+    const btn = el("button", "", s.status === "done" ? "보기" : "이어하기");
+    btn.onclick = () => openRead(s.read_id);
+    td.append(btn);
+    tr.append(td);
+    sb.append(tr);
+  }
+  if (!d.reads.length) sb.append(emptyRow(7, "아직 없습니다."));
+}
+
+$("#btn-read-bundle").onclick = async () => {
+  const btn = $("#btn-read-bundle");
+  btn.disabled = true;
+  try {
+    const b = await withProgress($("#read-bundle-status"), "명세 문서·정책·정답 구현·결함 출제 → 실행 검증 중…",
+      post("/api/criteria/bundles", {}));
+    await openReading();
+    $("#read-bundle-status").textContent = `"${b.title}" — 정책 ${b.policies}개, 문서 ${b.doc_chars.toLocaleString()}자. 시작을 눌러 푸세요.`;
+  } catch (err) {
+    $("#read-bundle-status").textContent = `생성 실패: ${err.message}`;
+  } finally {
+    btn.disabled = false;
+  }
+};
+
+async function startRead(bundleId, btn) {
+  btn.disabled = true;
+  try {
+    renderRead(await post("/api/reading/sheets", { bundle_id: bundleId, seconds: Number($("#read-seconds").value) }));
+  } catch (err) {
+    $("#read-start-status").textContent = err.message;
+    btn.disabled = false;
+  }
+}
+
+async function openRead(id) {
+  const v = await api(`/api/reading/sheets/${id}`);
+  if (v.status === "done") showReadResult(v);
+  else renderRead(v);
+}
+
+function renderRead(v) {
+  rs.sheet = v;
+  location.hash = `read=${v.read_id}`;
+  $("#rs-title").textContent = v.title;
+  $("#rs-doc").textContent = v.spec_doc;
+  $("#rs-doc").scrollTop = 0;
+  $("#rs-text").value = v.text;
+  $("#rs-text").disabled = false;
+  $("#rs-count").textContent = `항목 ${countItems(v.text)}개`;
+  $("#rs-status").textContent = "";
+  clearInterval(rs.tick);
+  rs.deadline = v.remaining_sec == null ? null : Date.now() + v.remaining_sec * 1000;
+  renderReadTimer();
+  rs.tick = setInterval(renderReadTimer, 500);
+  show("read-sheet");
+}
+
+$("#rs-text").oninput = () => {
+  $("#rs-count").textContent = `항목 ${countItems($("#rs-text").value)}개`;
+  clearTimeout(rs.saveTimer);
+  rs.saveTimer = setTimeout(saveReadText, 800);
+};
+
+async function saveReadText() {
+  try {
+    await api(`/api/reading/sheets/${rs.sheet.read_id}/text`, { method: "PUT", body: JSON.stringify({ text: $("#rs-text").value }) });
+    $("#rs-status").textContent = `저장됨 ${fmtTime(Date.now())}`;
+  } catch (err) {
+    $("#rs-status").textContent = `저장 실패: ${err.message}`;
+  }
+}
+
+function renderReadTimer() {
+  if (rs.deadline === null) { $("#rs-timer").textContent = "제한 없음"; return; }
+  const left = Math.max(0, Math.ceil((rs.deadline - Date.now()) / 1000));
+  $("#rs-timer").textContent = `${Math.floor(left / 60)}:${pad(left % 60)}`;
+  $("#rs-timer").classList.toggle("low", left <= 120 && left > 0);
+  $("#rs-timer").classList.toggle("over", left === 0);
+  if (left === 0) submitRead(true);
+}
+
+$("#btn-rs-submit").onclick = () => submitRead(false);
+$("#btn-rs-leave").onclick = async () => {
+  clearTimeout(rs.saveTimer);
+  clearInterval(rs.tick);
+  await saveReadText().catch(() => {});
+  openReading();
+};
+
+async function submitRead(timedOut) {
+  if (rs.sending) return;
+  const text = $("#rs-text").value;
+  if (!timedOut && !countItems(text)) { $("#rs-status").textContent = "요구사항을 한 줄 이상 적으세요."; return; }
+  rs.sending = true;
+  clearInterval(rs.tick);
+  clearTimeout(rs.saveTimer);
+  $("#rs-text").disabled = true;
+  try {
+    const v = await withProgress($("#rs-status"), "정책 목록과 대조해 채점하는 중…",
+      post(`/api/reading/sheets/${rs.sheet.read_id}/submit`, { text, timed_out: timedOut }));
+    showReadResult(v);
+  } catch (err) {
+    // 채점 실패: 답안은 저장됨. 다시 제출할 수 있게 둔다 (시간은 더 흐르지 않음)
+    $("#rs-status").textContent = `제출 실패: ${err.message}`;
+    $("#rs-timer").textContent = "제출 대기";
+  } finally {
+    rs.sending = false;
+  }
+}
+
+function showReadResult(v) {
+  location.hash = `read=${v.read_id}`;
+  clearInterval(rs.tick);
+  const r = v.result;
+  const s = r.summary;
+  $("#rr-title").textContent = `채점 결과 — ${v.title}`;
+  const body = $("#rr-body");
+  body.innerHTML = "";
+  const row = el("div", "score-row");
+  const tile = (label, value, sub) => {
+    const t = el("div", "score");
+    t.append(el("span", "muted", label), el("b", "", value ?? "-"), el("small", "muted", sub || ""));
+    return t;
+  };
+  const mins = v.elapsed_sec == null ? "-" : `${Math.floor(v.elapsed_sec / 60)}분 ${v.elapsed_sec % 60}초`;
+  row.append(
+    tile("정책 포착률", pctText(s.recall), `반영 ${s.covered} · 부분 ${s.partial} / ${s.policies}`),
+    tile("잘못 해석", `${s.misread}개`, `누락 ${s.missed}개`),
+    tile("근거 없음·어긋남", `${s.unsupported + s.contradicts}개`, `내 항목 ${s.items}개 중 · 채점 외 ${s.extra}개`),
+    tile("시간", mins, v.timed_out ? "시간 초과로 자동 제출" : ""));
+  body.append(row);
+  body.append(el("p", "muted", "포착률 = (반영 + 부분 반영 × 0.5) / 정책 수. 정책 목록에 없지만 문서에 근거가 있는 항목은 감점하지 않습니다."));
+  body.append(el("p", "", "종류별 반영: " + s.by_kind.map((k) => `${k.label} ${k.covered}/${k.total}`).join(" · ")));
+  if (r.overall) body.append(el("p", "context", r.overall));
+
+  const order = { missed: 0, misread: 1, partial: 2, covered: 3 };
+  const pols = r.policies.slice().sort((a, b) => order[a.verdict] - order[b.verdict]);
+  const bad = pols.filter((p) => p.verdict !== "covered");
+  body.append(el("h2", "", `놓치거나 어긋난 정책 ${bad.length}개`));
+  if (!bad.length) body.append(el("p", "", "모든 정책을 정확히 옮겼습니다."));
+  const polCard = (p) => {
+    const b = el("div", `pol ${p.verdict === "covered" ? "caught" : p.verdict}`);
+    b.append(el("p", "", `${{ covered: "✓", partial: "△", misread: "✗", missed: "✗" }[p.verdict]} ${p.verdict_label} — ${p.title} (${p.kind_label}) — ${p.location}`));
+    b.append(el("blockquote", "", p.doc_quote));
+    b.append(el("p", "muted", `정책: ${p.statement}`));
+    for (const it of p.items) b.append(el("p", "mine", `내 항목 #${it.n}: ${it.text}`));
+    if (p.comment) b.append(el("p", "", p.comment));
+    if (p.if_missed && p.verdict !== "covered") b.append(el("p", "ev", `이 정책을 놓친 구현에서 생기는 일: ${p.if_missed}`));
+    return b;
+  };
+  for (const p of bad) body.append(polCard(p));
+  const good = pols.filter((p) => p.verdict === "covered");
+  if (good.length) {
+    const det = el("details");
+    det.append(el("summary", "", `정확히 옮긴 정책 ${good.length}개`));
+    for (const p of good) det.append(polCard(p));
+    body.append(det);
+  }
+
+  body.append(el("h2", "", `내 항목 ${r.items.length}개`));
+  const t = el("table", "list");
+  t.innerHTML = "<thead><tr><th>#</th><th>항목</th><th>판정</th><th>설명</th></tr></thead>";
+  const tb = el("tbody");
+  for (const it of r.items) {
+    const cls = { matched: "ok", extra: "", unsupported: "bad", contradicts: "bad" }[it.verdict];
+    const tr = el("tr", cls);
+    tr.append(el("td", "", String(it.n)), el("td", "", (it.section ? `[${it.section}] ` : "") + it.text),
+      el("td", "", it.verdict_label), el("td", "muted", it.comment));
+    tb.append(tr);
+  }
+  if (!r.items.length) tb.append(emptyRow(4, "제출한 항목이 없습니다."));
+  t.append(tb);
+  body.append(t);
+
+  const doc = el("details");
+  doc.append(el("summary", "", "명세 문서 다시 보기"), el("div", "readme", v.spec_doc));
+  body.append(doc);
+  show("read-result");
+}
+
 // ---------- 시작 ----------
 
 loadOptions();
@@ -1664,4 +1883,6 @@ else if (location.hash.startsWith("#run=")) openRun(location.hash.slice(5)).catc
 else if (location.hash === "#drill") openDrillSetup();
 else if (location.hash === "#criteria") openCriteria();
 else if (location.hash.startsWith("#sheet=")) openSheet(location.hash.slice(7)).catch(() => show("home"));
+else if (location.hash === "#reading") openReading();
+else if (location.hash.startsWith("#read=")) openRead(location.hash.slice(6)).catch(() => show("home"));
 else loadSessions();
