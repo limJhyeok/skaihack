@@ -98,7 +98,7 @@ class DisclosureJudgment(BaseModel):
 
 # ---------- 설명 리허설 (5.8, 6.4, 6.5) ----------
 
-RehearsalType = Literal["design_reason", "failure_response", "risk_prediction", "requirement_mapping",
+RehearsalType = Literal["architecture", "design_reason", "failure_response", "risk_prediction", "requirement_mapping",
                         "data_flow", "ai_decision", "experiment_reasoning"]
 CognitiveCategory = Literal["behavior_risk", "structure", "decision_rationale"]
 StepVerdict = Literal["met", "partial", "missed"]

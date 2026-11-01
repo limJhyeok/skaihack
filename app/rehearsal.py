@@ -20,6 +20,7 @@ STEP_SCORE = {"met": 1.0, "partial": 0.5, "missed": 0.0}
 CATEGORIES = {"behavior_risk": "동작 및 리스크 예측", "structure": "구조 이해", "decision_rationale": "의사결정 및 근거 이해"}
 EXPERIMENT_HINT = re.compile(r"(eval|experiment|result|benchmark|ablation|metric)", re.I)
 COORD = re.compile(r"\S+:\d+")
+DOC_SUFFIXES = {".md", ".txt", ".rst", ""}  # 문서 이름(README 등)은 요구사항 문항에서 쓸 수 있다
 
 
 class RehearsalError(RuntimeError):
@@ -109,6 +110,17 @@ def _standalone_inputs(repo: Path, purpose: str) -> tuple[codectx.CodeContext, d
 
 # ---------- 출제와 검증 ----------
 
+def _code_names(ctx: codectx.CodeContext) -> set[str]:
+    """질문에 나오면 안 되는 이름: 함수·클래스·경로·코드 파일명. 문서 파일 이름은 뺀다."""
+    docs = {n for rel in ctx.files for n in (Path(rel).name, Path(rel).stem) if Path(rel).suffix.lower() in DOC_SUFFIXES}
+    return ctx.identifiers() - docs
+
+
+def leaked_identifiers(text: str, names: set[str]) -> list[str]:
+    """영숫자 경계로 감싼 완전한 토큰만 센다 (한글 조사가 붙어도 잡히고, 영단어 일부는 안 잡힌다)."""
+    return sorted(n for n in names if re.search(rf"(?<![A-Za-z0-9_]){re.escape(n)}(?![A-Za-z0-9_])", text))
+
+
 def validate(questions: list[RehearsalQuestion], count: int, ctx: codectx.CodeContext) -> list[str]:
     errors = []
     if len(questions) != count:
@@ -117,10 +129,11 @@ def validate(questions: list[RehearsalQuestion], count: int, ctx: codectx.CodeCo
     for need in ("design_reason", "failure_response"):
         if need not in types:
             errors.append(f"{need} 유형 문항이 없음")
-    names = ctx.identifiers()
+    names = _code_names(ctx)
     for q in questions:
-        if not any(n in q.question for n in names):
-            errors.append(f"{q.id}: 질문에 실제 파일명·함수명이 없음")
+        leaked = leaked_identifiers(q.question, names)
+        if leaked:
+            errors.append(f"{q.id}: 질문에 코드 식별자({', '.join(leaked)})가 있음. 이름 대신 역할·동작으로 가리킬 것")
         for step in ("weak_point", "impact", "plan"):
             s = getattr(q.model_answer, step)
             if not s.text.strip() or not any(COORD.search(e) for e in s.evidence):
