@@ -34,6 +34,8 @@ def render_system(problem: ProblemPublic, sealed: Sealed) -> str:
         detail=_lines(by("detail"), "detail") if by("detail") else "",
         conflict=_lines(by("conflict"), None),
         confirm_only=_lines(by("confirm_only"), None),
+        buried=_lines(by("buried"), None),
+        readme=problem.readme_markdown,
         constraint=_lines(by("constraint"), "reveal_when"),
         priority_confusion="\n".join(f"- {c}" for c in sealed.priority_confusion) or "(없음)",
     )

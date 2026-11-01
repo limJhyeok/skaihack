@@ -77,7 +77,22 @@ def _session_inputs(session_id: str) -> tuple[codectx.CodeContext, dict]:
         "docs": _cap(other, 8000),
         "chat": _cap(chat or "(대화 없음)", 8000),
         "agent_log_summary": _cap(agent_summary(process), 10000),
+        "concept_seeds": concept_seeds(session_id),
     }
+
+
+def concept_seeds(session_id: str) -> str:
+    """출제 때 심은 설계 개념의 서술형 씨앗. 리허설은 제출 뒤라 봉인 정보를 출제 입력으로 써도 응답에는 나가지 않는다."""
+    try:
+        sealed = sessions.load_sealed(session_id)
+    except Exception:
+        return "(없음)"
+    if not sealed.concepts:
+        return "(없음)"
+    role = {"core": "핵심 — 구현 여부를 확인", "light": "보조 — 구현 여부를 확인", "qa_only": "Q&A 전용 — 구현과 무관하게 한계·대안으로 질문"}
+    return "\n".join(
+        f"- [{role[c.role]}] 순진한 구현의 결함: {c.naive_failure} / 개선안: {c.plan} / 질문 씨앗: {' / '.join(c.qa_seeds)}"
+        for c in sealed.concepts)
 
 
 def agent_summary(process: dict) -> str:
@@ -105,6 +120,7 @@ def _standalone_inputs(repo: Path, purpose: str) -> tuple[codectx.CodeContext, d
         "docs": "(없음)",
         "chat": "(단독 리허설: 담당자 대화 없음)",
         "agent_log_summary": "(단독 리허설: 수집하지 않음)",
+        "concept_seeds": "(없음)",
     }
 
 

@@ -3,7 +3,9 @@ from typing import Literal
 
 from pydantic import BaseModel
 
-FactType = Literal["ask_to_reveal", "conflict", "confirm_only", "constraint", "detail"]
+FactType = Literal["ask_to_reveal", "conflict", "confirm_only", "constraint", "detail", "buried"]
+ConceptRole = Literal["core", "light", "qa_only"]
+ConceptPlacementKind = Literal["readme", "fact", "data"]
 Importance = Literal["critical", "major", "minor"]
 Difficulty = Literal["easy", "standard", "hard"]
 
@@ -32,6 +34,19 @@ class Fact(BaseModel):
     importance: Importance
     reveal_when: str
     example_question: str
+    # buried(README에 묻힌 사실)만: README 원문에서 그대로 옮긴 근거 문장. 그 외 유형은 null.
+    readme_quote: str | None = None
+
+
+class ConceptUse(BaseModel):
+    """출제 LLM이 설계 개념을 실제로 어디에 심었는지 (docs/flow_drills_design.md 5.3)."""
+    id: str
+    role: ConceptRole
+    placements: list[ConceptPlacementKind]
+    fact_ids: list[str]
+    naive_failure: str      # 이 문항에서 순진하게 구현하면 생기는 결함 (weak_point·impact 씨앗)
+    plan: str               # 개선안 (plan 씨앗)
+    qa_seeds: list[str]     # 서술형 질문 씨앗
 
 
 class Sealed(BaseModel):
@@ -46,6 +61,7 @@ class Sealed(BaseModel):
     ai_fit: str = ""
     tech_requirement: str | None = None
     themes: list[str] = []
+    concepts: list[ConceptUse] = []
 
 
 class GeneratedProblem(BaseModel):
@@ -60,6 +76,7 @@ class GeneratedProblem(BaseModel):
     good_solution_criteria: list[str]
     overengineering_traps: list[str]
     data_file_notes: str
+    concepts: list[ConceptUse]
 
 
 class ProblemPublic(BaseModel):
@@ -206,8 +223,17 @@ class EvalItem(BaseModel):
     suggestion: str
 
 
+class PolicyCheck(BaseModel):
+    """묻힌 사실·설계 개념이 결과물·문서·테스트에 반영됐는지 (공개 화면에서만 보여 줌)."""
+    ref: str                # 사실 id(F..) 또는 개념 id
+    verdict: Literal["반영", "부분 반영", "미반영"]
+    evidence: list[str]
+    note: str
+
+
 class TechnicalEval(BaseModel):
     items: list[EvalItem]
+    policy_checks: list[PolicyCheck]
     undiscovered_note: str
     strengths: list[str]
     improvements: list[str]

@@ -2,12 +2,13 @@
 import json
 from datetime import datetime
 
-from . import evaluate, llm, metrics, prompts, sessions
+from . import evaluate, generator, llm, metrics, prompts, sessions
 from .config import settings
 from .schemas import RevealMissed
 
 TYPE_LABEL = {"ask_to_reveal": "물어야 나옴", "conflict": "자료와 충돌", "confirm_only": "확인만",
-              "constraint": "제약·금지", "detail": "현장 디테일"}
+              "constraint": "제약·금지", "detail": "현장 디테일", "buried": "README에 묻힘"}
+ROLE_LABEL = {"core": "핵심", "light": "보조", "qa_only": "Q&A 전용"}
 
 AI_FIT_LABEL = {"core": "LLM이 핵심 기능", "assist": "LLM은 선택적 보조 기능",
                 "unfit": "LLM이 맞지 않음 — 핵심 로직은 결정적으로 짜야 함"}
@@ -28,7 +29,9 @@ def reveal(session_id: str) -> dict:
     chat = sessions.read_jsonl(session_id, "chat.jsonl")
     disc = metrics.discovery(sealed, chat)
     questions = [r["text"] for r in chat if r["role"] == "user"]
-    missed = [f for f in sealed.facts if not disc[f.id]["discovered"]]
+    # 묻힌 사실은 대화로 찾는 대상이 아니라 질문 분석에서 뺀다 (반영 여부는 policy_checks로 본다).
+    missed = [f for f in sealed.facts if f.type != "buried" and not disc[f.id]["discovered"]]
+    checks = _policy_checks(d)
 
     analysis = {}
     if missed:
@@ -52,6 +55,7 @@ def reveal(session_id: str) -> dict:
             "example_question": f.example_question,
             "closest_user_question": a.get("closest_user_question"),
             "why_missed": a.get("why_missed"), "better_question": a.get("better_question"),
+            "readme_quote": f.readme_quote, "reflection": checks.get(f.id) if f.type == "buried" else None,
         })
     result = {
         "revealed_at": sessions.now_iso(),
@@ -64,6 +68,7 @@ def reveal(session_id: str) -> dict:
         "ai_fit_label": AI_FIT_LABEL.get(sealed.ai_fit, ""),
         "tech_requirement": sealed.tech_requirement,
         "themes": sealed.themes,
+        "concepts": concept_rows(sealed, checks),
     }
     (d / "reveal.json").write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
     if not (d / "retro.md").exists():
@@ -73,6 +78,26 @@ def reveal(session_id: str) -> dict:
     return load(session_id)
 
 
+def _policy_checks(d) -> dict[str, dict]:
+    p = d / "policy_checks.json"
+    return {c["ref"]: c for c in json.loads(p.read_text(encoding="utf-8"))} if p.exists() else {}
+
+
+def concept_rows(sealed, checks: dict[str, dict]) -> list[dict]:
+    """놓친 개념 복습용: 순진한 구현 → 결함 → 개선."""
+    rows = []
+    for c in sealed.concepts:
+        card = generator.CONCEPTS.get(c.id, {})
+        rows.append({
+            "id": c.id, "name": card.get("name", c.id), "role": c.role, "role_label": ROLE_LABEL.get(c.role, c.role),
+            "placements": c.placements, "fact_ids": c.fact_ids,
+            "naive_failure": c.naive_failure, "plan": c.plan,
+            "simplification": card.get("simplification", ""), "qa_seeds": c.qa_seeds,
+            "check": checks.get(c.id),
+        })
+    return rows
+
+
 def retro_template(session_id: str, rv: dict) -> str:
     problem = sessions.load_problem(session_id)
     rep = evaluate.load_report(session_id) or {}
@@ -80,7 +105,14 @@ def retro_template(session_id: str, rv: dict) -> str:
     tok = (rep.get("intent", {}).get("metrics", {}).get("tokens") or {})
     facts = rv["facts"]
     crit = [f for f in facts if f["importance"] == "critical"]
-    missed = [f for f in facts if not f["discovered"]]
+    missed = [f for f in facts if f["type"] != "buried" and not f["discovered"]]
+    buried = [f for f in facts if f["type"] == "buried"]
+    buried_miss = [f for f in buried if (f.get("reflection") or {}).get("verdict") != "반영"]
+    buried_lines = "\n".join(
+        f"  - {f['id']} {f['statement']} ({(f.get('reflection') or {}).get('verdict', '판정 없음')})"
+        for f in buried_miss) or "  - 없음"
+    weak_concepts = [c for c in rv.get("concepts", []) if c["role"] != "qa_only" and (c.get("check") or {}).get("verdict") != "반영"]
+    concept_lines = "\n".join(f"  - {c['name']}: {c['naive_failure']}\n    → {c['plan']}" for c in weak_concepts) or "  - 없음"
     missed_lines = "\n".join(
         f"  - {f['id']} ({f['type_label']}) {f['statement']}\n    → {f['better_question'] or f['example_question']}"
         for f in missed) or "  - 없음"
@@ -89,10 +121,16 @@ def retro_template(session_id: str, rv: dict) -> str:
     return f"""# 모의고사 회고 ({datetime.now():%Y-%m-%d} / {problem.title})
 ## 결과
 - 기술 {fmt(sc.get('technical'))} | 의도 {fmt(sc.get('intent'))} | 인지 {fmt(sc.get('cognitive'))} | 토큰 {fmt(tok.get('billable', tok.get('total')))}
-- 숨은 사실 발견: {sum(f['discovered'] for f in facts)}/{len(facts)} (critical {sum(f['discovered'] for f in crit)}/{len(crit)})
+- 숨은 사실 발견: {sum(f['discovered'] for f in facts if f['type'] != 'buried')}/{len(facts) - len(buried)} (critical {sum(f['discovered'] for f in crit if f['type'] != 'buried')}/{sum(f['type'] != 'buried' for f in crit)})
+- README에 묻힌 사실 반영: {len(buried) - len(buried_miss)}/{len(buried)}
 ## 인터뷰
 - 놓친 요구사항과 했어야 할 질문:
 {missed_lines}
+## 문서 읽기
+- README에 있었지만 반영하지 못한 것:
+{buried_lines}
+- 놓친 설계 판단 (순진한 구현 → 개선):
+{concept_lines}
 ## AI 협업
 - 가장 효과적이었던 프롬프트:
 - AI에 끌려간 순간:

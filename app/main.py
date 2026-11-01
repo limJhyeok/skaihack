@@ -38,7 +38,7 @@ def new_problem(req: NewProblemRequest):
         raise HTTPException(500, "MOCK_MODEL_STRONG 환경변수가 설정되지 않았습니다.")
     try:
         choice = generator.pick(req.domain, req.archetype, req.difficulty, req.seed, sessions.used_domains(),
-                                sessions.recent_archetypes())
+                                sessions.recent_archetypes(), sessions.recent_core_concepts())
         gen = generator.generate(choice)
     except ValueError as e:
         raise HTTPException(400, str(e))

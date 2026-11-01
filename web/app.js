@@ -800,16 +800,22 @@ async function openReveal() {
   const rv = await api(`/api/sessions/${state.session.session_id}/reveal`);
   const b = $("#reveal-body");
   b.innerHTML = "";
-  const facts = rv.facts;
+  const facts = rv.facts.filter((f) => f.type !== "buried");
+  const buried = rv.facts.filter((f) => f.type === "buried");
   const crit = facts.filter((f) => f.importance === "critical");
-  b.append(el("p", "rh-question", `발견 ${facts.filter((f) => f.discovered).length}/${facts.length} · critical ${crit.filter((f) => f.discovered).length}/${crit.length}`));
+  const reflected = buried.filter((f) => (f.reflection || {}).verdict === "반영");
+  b.append(el("p", "rh-question", `발견 ${facts.filter((f) => f.discovered).length}/${facts.length} · critical ${crit.filter((f) => f.discovered).length}/${crit.length}`
+    + (buried.length ? ` · README에 묻힌 사실 반영 ${reflected.length}/${buried.length}` : "")));
   const tbl = el("table", "grid");
-  tbl.innerHTML = "<tr><th>ID</th><th>내용</th><th>유형</th><th>중요도</th><th>발견</th></tr>";
-  for (const f of facts) {
-    const tr = el("tr", f.discovered ? "" : "bad");
+  tbl.innerHTML = "<tr><th>ID</th><th>내용</th><th>유형</th><th>중요도</th><th>발견·반영</th></tr>";
+  for (const f of rv.facts) {
+    const isBuried = f.type === "buried";
+    const verdict = isBuried ? ((f.reflection || {}).verdict || "판정 없음") : null;
+    const ok = isBuried ? verdict === "반영" : f.discovered;
+    const tr = el("tr", ok ? "" : "bad");
     tr.append(el("td", "", f.id), el("td", "", f.statement), el("td", "", f.type_label), el("td", "", f.importance));
-    tr.append(el("td", f.discovered ? "found" : "notfound",
-      f.discovered ? `질문 #${f.question_no} (채팅 #${f.chat_turn})` : f.partial ? "부분 언급" : "놓침"));
+    tr.append(el("td", ok ? "found" : "notfound", isBuried ? `README 명시 · ${verdict}`
+      : f.discovered ? `질문 #${f.question_no} (채팅 #${f.chat_turn})` : f.partial ? "부분 언급" : "놓침"));
     tbl.append(tr);
   }
   b.append(tbl);
@@ -824,6 +830,39 @@ async function openReveal() {
         ["내 질문 중 가장 가까웠던 것", f.closest_user_question || "없음"],
         ["빗나간 이유", f.why_missed || "-"],
         ["더 나은 질문 (better_question)", f.better_question || "-"],
+      ]));
+      b.append(c);
+    }
+  }
+  const buriedMiss = buried.filter((f) => (f.reflection || {}).verdict !== "반영");
+  if (buriedMiss.length) {
+    b.append(el("h2", "", "README에 있었지만 반영하지 못한 것"));
+    for (const f of buriedMiss) {
+      const c = el("div", "item");
+      c.append(el("b", "", `${f.id} · ${f.statement}`));
+      const r = f.reflection || {};
+      c.append(kvList([
+        ["README 원문", f.readme_quote || "-"],
+        ["판정", r.verdict || "판정 없음 (평가 전 생성된 세션)"],
+        ["근거", (r.evidence || []).join(", ") || "-"],
+        ["설명", r.note || "-"],
+      ]));
+      b.append(c);
+    }
+  }
+  if ((rv.concepts || []).length) {
+    b.append(el("h2", "", "설계 판단 복습 (순진한 구현 → 결함 → 개선)"));
+    for (const k of rv.concepts) {
+      const c = el("div", "item");
+      const chk = k.check || {};
+      c.append(el("b", "", `[${k.role_label}] ${k.name}` + (k.role === "qa_only" ? "" : ` · ${chk.verdict || "판정 없음"}`)));
+      c.append(kvList([
+        ["순진한 구현의 결함", k.naive_failure],
+        ["2시간 간소화 허용선", k.simplification || "-"],
+        ["개선", k.plan],
+        ["연결된 사실", (k.fact_ids || []).join(", ") || "-"],
+        ["내 결과물", chk.note ? `${chk.note}${(chk.evidence || []).length ? " (" + chk.evidence.join(", ") + ")" : ""}` : "-"],
+        ["서술형 질문 씨앗", (k.qa_seeds || []).join(" / ") || "-"],
       ]));
       b.append(c);
     }

@@ -50,6 +50,8 @@ def build() -> dict:
             sealed = sessions.load_sealed(s.session_id)
             disc = metrics.discovery(sealed, sessions.read_jsonl(s.session_id, "chat.jsonl"))
             for f in sealed.facts:
+                if f.type not in type_counts:  # buried: 대화 발견 대상이 아님
+                    continue
                 type_counts[f.type][1] += 1
                 type_counts[f.type][0] += disc[f.id]["discovered"]
                 if f.importance == "critical":
