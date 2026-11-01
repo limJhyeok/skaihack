@@ -1332,6 +1332,328 @@ function showCard0() {
   show("drill-card");
 }
 
+// ---------- 성공 기준 드릴 (docs/flow_drills_design.md 4절 B) ----------
+
+const cs = { sheet: null, rows: [], deadline: null, tick: null, sending: false, saveTimer: null };
+const pctText = (v) => (v == null ? "-" : `${v}%`);
+const TYPE_HINT = { int: "정수", number: "숫자", str: "글자", bool: "참/거짓", date: "날짜", time: "시각", datetime: "날짜·시각", choice: "선택", list: "쉼표로 구분" };
+
+$("#btn-criteria").onclick = openCriteria;
+$("#btn-cr-setup").onclick = openCriteria;
+
+function emptyRow(cols, text) {
+  const tr = el("tr");
+  const td = el("td", "muted", text);
+  td.colSpan = cols;
+  tr.append(td);
+  return tr;
+}
+
+async function openCriteria() {
+  location.hash = "criteria";
+  clearInterval(cs.tick);
+  show("crit-setup");
+  const d = await api("/api/criteria");
+  const tb = $("#crit-bundles");
+  tb.innerHTML = "";
+  for (const b of d.bundles) {
+    const tr = el("tr");
+    const name = el("td", "", b.title);
+    name.append(el("br"), el("small", "muted", `${b.domain} · ${b.concepts.join(", ")} · ${b.doc_chars.toLocaleString()}자`));
+    tr.append(name, el("td", "", `정책 ${b.policies} · 결함 ${b.defects}`), el("td", "", `${b.sheets}회`),
+      el("td", "", pctText(b.best_coverage)));
+    const td = el("td");
+    const btn = el("button", "primary", "시작");
+    btn.onclick = () => startSheet(b.bundle_id, btn);
+    td.append(btn);
+    tr.append(td);
+    tb.append(tr);
+  }
+  if (!d.bundles.length) tb.append(emptyRow(5, "아직 정책 묶음이 없습니다. 위에서 새로 만드세요."));
+  const sb = $("#crit-sheets");
+  sb.innerHTML = "";
+  for (const s of d.sheets) {
+    const tr = el("tr");
+    tr.append(el("td", "", s.sheet_id), el("td", "", s.title), el("td", "", `${s.rows}개`),
+      el("td", "", pctText(s.accuracy)), el("td", "", pctText(s.coverage)));
+    const td = el("td");
+    const btn = el("button", "", s.status === "done" ? "보기" : "이어하기");
+    btn.onclick = () => openSheet(s.sheet_id);
+    td.append(btn);
+    tr.append(td);
+    sb.append(tr);
+  }
+  if (!d.sheets.length) sb.append(emptyRow(6, "아직 없습니다."));
+}
+
+$("#btn-bundle").onclick = async () => {
+  const btn = $("#btn-bundle");
+  btn.disabled = true;
+  try {
+    const b = await withProgress($("#crit-bundle-status"), "명세 문서·정책·정답 구현·결함 출제 → 실행 검증 중…",
+      post("/api/criteria/bundles", {}));
+    await openCriteria();
+    $("#crit-bundle-status").textContent = `"${b.title}" — 정책 ${b.policies}개, 결함 ${b.defects}개, 문서 ${b.doc_chars.toLocaleString()}자. 시작을 눌러 푸세요.`;
+  } catch (err) {
+    $("#crit-bundle-status").textContent = `생성 실패: ${err.message}`;
+  } finally {
+    btn.disabled = false;
+  }
+};
+
+async function startSheet(bundleId, btn) {
+  btn.disabled = true;
+  try {
+    renderSheet(await post("/api/criteria/sheets", { bundle_id: bundleId, seconds: Number($("#crit-seconds").value) }));
+  } catch (err) {
+    $("#crit-start-status").textContent = err.message;
+    btn.disabled = false;
+  }
+}
+
+async function openSheet(id) {
+  const v = await api(`/api/criteria/sheets/${id}`);
+  if (v.status === "done") showCritResult(v);
+  else renderSheet(v);
+}
+
+function inputFor(type, options, name) {
+  let inp;
+  if (type === "choice" || type === "bool") {
+    inp = el("select");
+    inp.add(new Option("(선택)", ""));
+    for (const o of type === "bool" ? ["true", "false"] : options) inp.add(new Option(o, o));
+  } else {
+    inp = el("input");
+    inp.autocomplete = "off";
+    inp.type = { int: "number", number: "number", date: "date", time: "time", datetime: "datetime-local" }[type] || "text";
+    if (type === "number") inp.step = "any";
+    if (type === "list") inp.placeholder = "쉼표로 구분 (예: 김하나, 이두리). 없으면 비움";
+  }
+  inp.name = name;
+  return inp;
+}
+
+function renderSheet(v) {
+  cs.sheet = v;
+  cs.rows = v.rows.slice();
+  location.hash = `sheet=${v.sheet_id}`;
+  $("#cs-title").textContent = v.title;
+  $("#cs-doc").textContent = v.spec_doc;
+  $("#cs-doc").scrollTop = 0;
+  const box = $("#cs-funcs");
+  box.innerHTML = "";
+  for (const f of v.functions) {
+    const fb = el("div", "fn-box");
+    const h = el("h3", "", f.summary);
+    h.append(" ", el("code", "muted", f.name));
+    fb.append(h);
+    const form = el("form");
+    for (const p of f.params) {
+      const lab = el("label", "", `${p.label} (${TYPE_HINT[p.type]})`);
+      lab.append(inputFor(p.type, p.options, `a_${p.name}`));
+      form.append(lab);
+    }
+    const out = el("label", "", `→ 기대 ${f.returns.label} (${TYPE_HINT[f.returns.type]})`);
+    out.append(inputFor(f.returns.type, f.returns.options, "_expected"));
+    form.append(out);
+    const note = el("label", "wide2", "메모 (어느 정책·경계를 확인하나, 선택)");
+    const ni = el("input");
+    ni.name = "_note";
+    note.append(ni);
+    form.append(note);
+    const row = el("div", "row wide2");
+    const add = el("button", "primary", "예시 추가");
+    add.type = "submit";
+    row.append(add);
+    form.append(row);
+    form.onsubmit = (e) => {
+      e.preventDefault();
+      const args = {};
+      for (const p of f.params) args[p.name] = form[`a_${p.name}`].value;
+      const missing = f.params.filter((p) => !["str", "list"].includes(p.type) && !args[p.name]).map((p) => p.label);
+      if (!form._expected.value) missing.push("기대 출력");
+      if (missing.length) {
+        $("#cs-status").textContent = `${f.summary}: ${missing.join(", ")}을(를) 채우세요.`;
+        return;
+      }
+      cs.rows.push({ func: f.name, args, expected: form._expected.value, note: form._note.value });
+      form._note.value = "";
+      renderRows();
+      scheduleSave();
+    };
+    fb.append(form);
+    box.append(fb);
+  }
+  renderRows();
+  $("#cs-status").textContent = "";
+  clearInterval(cs.tick);
+  cs.deadline = v.remaining_sec == null ? null : Date.now() + v.remaining_sec * 1000;
+  renderSheetTimer();
+  cs.tick = setInterval(renderSheetTimer, 500);
+  show("crit-sheet");
+}
+
+const showVal = (x) => String(x).replace("T", " ");
+
+function renderRows() {
+  const fns = Object.fromEntries(cs.sheet.functions.map((f) => [f.name, f]));
+  const tb = $("#cs-rows");
+  tb.innerHTML = "";
+  cs.rows.forEach((r, i) => {
+    const f = fns[r.func];
+    const tr = el("tr");
+    const call = f.params.map((p) => `${p.label} ${showVal(r.args[p.name] ?? "") || "(없음)"}`).join(", ");
+    const td = el("td");
+    const del = el("button", "ghost", "✕");
+    del.title = "삭제";
+    del.onclick = () => { cs.rows.splice(i, 1); renderRows(); scheduleSave(); };
+    td.append(del);
+    tr.append(el("td", "", String(i + 1)), el("td", "", f.summary), el("td", "", call), el("td", "", showVal(r.expected)),
+      el("td", "muted", r.note), td);
+    tb.append(tr);
+  });
+  if (!cs.rows.length) tb.append(emptyRow(6, "아직 예시가 없습니다."));
+  $("#cs-count").textContent = `${cs.rows.length}개`;
+}
+
+function scheduleSave() {
+  clearTimeout(cs.saveTimer);
+  cs.saveTimer = setTimeout(async () => {
+    try {
+      await api(`/api/criteria/sheets/${cs.sheet.sheet_id}/rows`, { method: "PUT", body: JSON.stringify({ rows: cs.rows }) });
+      $("#cs-status").textContent = `저장됨 ${fmtTime(Date.now())}`;
+    } catch (err) {
+      $("#cs-status").textContent = `저장 실패: ${err.message}`;
+    }
+  }, 500);
+}
+
+function renderSheetTimer() {
+  if (cs.deadline === null) { $("#cs-timer").textContent = "제한 없음"; return; }
+  const left = Math.max(0, Math.ceil((cs.deadline - Date.now()) / 1000));
+  $("#cs-timer").textContent = `${Math.floor(left / 60)}:${pad(left % 60)}`;
+  $("#cs-timer").classList.toggle("low", left <= 120 && left > 0);
+  $("#cs-timer").classList.toggle("over", left === 0);
+  if (left === 0) submitSheet(true);
+}
+
+$("#btn-cs-submit").onclick = () => submitSheet(false);
+$("#btn-cs-leave").onclick = async () => {
+  clearTimeout(cs.saveTimer);
+  clearInterval(cs.tick);
+  await api(`/api/criteria/sheets/${cs.sheet.sheet_id}/rows`, { method: "PUT", body: JSON.stringify({ rows: cs.rows }) }).catch(() => {});
+  openCriteria();
+};
+
+async function submitSheet(timedOut) {
+  if (cs.sending) return;
+  if (!timedOut && !cs.rows.length) { $("#cs-status").textContent = "예시를 하나 이상 추가하세요."; return; }
+  cs.sending = true;
+  clearInterval(cs.tick);
+  clearTimeout(cs.saveTimer);
+  try {
+    const v = await withProgress($("#cs-status"), "정답 구현과 결함 버전에 예시를 실행하는 중…",
+      post(`/api/criteria/sheets/${cs.sheet.sheet_id}/submit`, { rows: cs.rows, timed_out: timedOut }));
+    showCritResult(v);
+  } catch (err) {
+    $("#cs-status").textContent = `제출 실패: ${err.message}`;
+  } finally {
+    cs.sending = false;
+  }
+}
+
+function policyBox(d, cls) {
+  const b = el("div", `pol ${cls}`);
+  b.append(el("p", "", `${d.policy_title} (${d.kind_label}) — ${d.location}`));
+  b.append(el("blockquote", "", d.doc_quote));
+  b.append(el("p", "muted", `정책: ${d.statement}`));
+  return b;
+}
+
+function showCritResult(v) {
+  location.hash = `sheet=${v.sheet_id}`;
+  clearInterval(cs.tick);
+  const r = v.result;
+  const s = r.summary;
+  $("#cr-title").textContent = `채점 결과 — ${v.title}`;
+  const body = $("#cr-body");
+  body.innerHTML = "";
+  const row = el("div", "score-row");
+  const tile = (label, value, sub) => {
+    const t = el("div", "score");
+    t.append(el("span", "muted", label), el("b", "", value ?? "-"), el("small", "muted", sub || ""));
+    return t;
+  };
+  const mins = v.elapsed_sec == null ? "-" : `${Math.floor(v.elapsed_sec / 60)}분 ${v.elapsed_sec % 60}초`;
+  row.append(
+    tile("정책 이해 정확도", pctText(s.accuracy), `맞은 예시 ${s.correct} / ${s.valid}`),
+    tile("결함 검출률", pctText(s.coverage), `잡은 결함 ${s.killed} / ${s.defects}`),
+    tile("예시", `${s.rows}개`, `형식·실행 오류 ${s.invalid} · 아무 결함도 못 잡은 맞는 예시 ${s.idle}`),
+    tile("시간", mins, v.timed_out ? "시간 초과로 자동 제출" : ""));
+  body.append(row);
+  body.append(el("p", "muted", "정확도: 내 기대값이 정답 구현의 실제 출력과 같은 비율. 검출률: 맞는 예시 중 하나라도 결함 버전에서 다른 값이 나오면 그 결함을 잡은 것."));
+
+  body.append(el("h2", "", "내 예시"));
+  const t = el("table", "list");
+  t.innerHTML = "<thead><tr><th>#</th><th>입력</th><th>내 기대</th><th>정답 구현</th><th>잡은 결함</th></tr></thead>";
+  const tb = el("tbody");
+  for (const g of r.rows) {
+    const cls = { correct: "ok", wrong: "bad" }[g.verdict] || "err";
+    const tr = el("tr", cls);
+    const actual = g.verdict === "correct" || g.verdict === "wrong" ? g.actual : g.verdict === "error" ? "실행 오류" : "형식 오류";
+    tr.append(el("td", "", String(g.n)), el("td", "", g.call), el("td", "", showVal(g.expected)), el("td", "", actual),
+      el("td", "", g.kills.join(", ") || (g.verdict === "correct" ? "없음" : "-")));
+    tb.append(tr);
+    const notes = [];
+    if (g.error) notes.push(g.error);
+    for (const d of g.diagnosis) notes.push(`내 기대값은 "${d.defect_summary}" 구현의 출력과 같습니다 → 오해한 정책: ${d.policy_title} (${d.location})`);
+    if (g.verdict === "correct" && !g.kills.length) notes.push("맞지만 어떤 결함도 잡지 못한 평범한 경우입니다. 경계 쪽으로 옮겨 보세요.");
+    if (notes.length) {
+      const nr = el("tr", cls);
+      const td = el("td", "muted", notes.join(" / "));
+      td.colSpan = 5;
+      nr.append(td);
+      tb.append(nr);
+    }
+  }
+  t.append(tb);
+  body.append(t);
+
+  const missed = r.defects.filter((d) => !d.killed_by.length);
+  body.append(el("h2", "", `놓친 결함 ${missed.length}개`));
+  if (!missed.length) body.append(el("p", "", "모든 결함 버전을 잡았습니다."));
+  for (const d of missed) {
+    const b = policyBox(d, "missed");
+    b.prepend(el("p", "", `✗ ${d.id} ${d.defect_summary}`));
+    for (const ex of d.model_examples) b.append(el("p", "ev", `이 예시라면 잡았음: ${ex.call} → ${ex.expected}${ex.note ? ` (${ex.note})` : ""}`));
+    body.append(b);
+  }
+  const caught = r.defects.filter((d) => d.killed_by.length);
+  if (caught.length) {
+    body.append(el("h2", "", `잡은 결함 ${caught.length}개`));
+    for (const d of caught) {
+      const b = policyBox(d, "caught");
+      b.prepend(el("p", "", `✓ ${d.id} ${d.defect_summary} — 예시 #${d.killed_by.join(", #")}`));
+      body.append(b);
+    }
+  }
+  const all = el("details");
+  all.append(el("summary", "", `정책 목록 전체 (${r.policies.length}개, 복습용)`));
+  for (const p of r.policies) {
+    const b = el("div", "pol");
+    b.append(el("p", "", `[${p.kind_label}] ${p.title} — ${p.location}${p.has_defect ? "" : " (결함 버전 없음)"}`),
+      el("blockquote", "", p.doc_quote), el("p", "muted", p.statement));
+    all.append(b);
+  }
+  body.append(all);
+  const doc = el("details");
+  const dd = el("div", "readme", v.spec_doc);
+  doc.append(el("summary", "", "명세 문서 다시 보기"), dd);
+  body.append(doc);
+  show("crit-result");
+}
+
 // ---------- 시작 ----------
 
 loadOptions();
@@ -1340,4 +1662,6 @@ if (m) openSession(m[1]).catch(() => show("home"));
 else if (location.hash === "#dashboard") openDashboard();
 else if (location.hash.startsWith("#run=")) openRun(location.hash.slice(5)).catch(() => show("home"));
 else if (location.hash === "#drill") openDrillSetup();
+else if (location.hash === "#criteria") openCriteria();
+else if (location.hash.startsWith("#sheet=")) openSheet(location.hash.slice(7)).catch(() => show("home"));
 else loadSessions();

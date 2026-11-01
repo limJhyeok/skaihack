@@ -8,7 +8,7 @@ from pydantic import BaseModel
 import json
 from pathlib import Path
 
-from . import cards, collector, dashboard, evaluate, fresh, generator, helper, persona, rehearsal, reveal, runner, sessions, submit, timer, workspace
+from . import cards, collector, criteria, dashboard, evaluate, fresh, generator, helper, persona, policy, rehearsal, reveal, runner, sessions, submit, timer, workspace
 from .config import APP_ROOT, settings
 from .llm import LLMError
 from .schemas import Difficulty, GeneratedProblem, ProblemPublic, Sealed, Session
@@ -397,6 +397,88 @@ def _card_call(fn):
         raise HTTPException(409, str(e))
     except LLMError as e:
         raise HTTPException(502, str(e))
+
+
+# ---------- 정책 묶음 + B. 성공 기준 드릴 (docs/flow_drills_design.md 3·4절) ----------
+
+class BundleCreate(BaseModel):
+    seed: int | None = None
+
+
+class SheetCreate(BaseModel):
+    bundle_id: str
+    seconds: int = criteria.DEFAULT_SECONDS   # 0이면 시간 제한 없음
+
+
+class SheetRow(BaseModel):
+    func: str
+    args: dict[str, str]
+    expected: str
+    note: str = ""
+
+
+class SheetRows(BaseModel):
+    rows: list[SheetRow]
+    timed_out: bool = False
+
+
+@app.get("/api/criteria")
+def criteria_overview():
+    return criteria.overview()
+
+
+@app.post("/api/criteria/bundles")
+def create_bundle(req: BundleCreate):
+    if not settings.model_strong:
+        raise HTTPException(500, "MOCK_MODEL_STRONG 환경변수가 설정되지 않았습니다.")
+    try:
+        return policy.summary(policy.generate(req.seed))
+    except policy.PolicyError as e:
+        raise HTTPException(502, str(e))
+    except LLMError as e:
+        raise HTTPException(502, str(e))
+
+
+@app.post("/api/criteria/sheets")
+def create_sheet(req: SheetCreate):
+    if not 0 <= req.seconds <= 7200:
+        raise HTTPException(400, "시간은 0~7200초입니다.")
+    try:
+        sheet = criteria.create(req.bundle_id, req.seconds)
+    except (FileNotFoundError, ValueError):
+        raise HTTPException(404, "정책 묶음을 찾을 수 없습니다.")
+    return criteria.view(sheet)
+
+
+@app.get("/api/criteria/sheets/{sheet_id}")
+def get_sheet(sheet_id: str):
+    return criteria.view(_load_sheet(sheet_id))
+
+
+@app.put("/api/criteria/sheets/{sheet_id}/rows")
+def save_sheet_rows(sheet_id: str, req: SheetRows):
+    _load_sheet(sheet_id)
+    return _criteria_call(lambda: criteria.save_rows(sheet_id, [r.model_dump() for r in req.rows]))
+
+
+@app.post("/api/criteria/sheets/{sheet_id}/submit")
+def submit_sheet(sheet_id: str, req: SheetRows):
+    _load_sheet(sheet_id)
+    return _criteria_call(lambda: criteria.submit(sheet_id, [r.model_dump() for r in req.rows], req.timed_out))
+
+
+def _load_sheet(sheet_id: str) -> dict:
+    try:
+        return criteria.load(sheet_id)
+    except (FileNotFoundError, ValueError):
+        raise HTTPException(404, "답안을 찾을 수 없습니다.")
+
+
+def _criteria_call(fn):
+    try:
+        return fn()
+    except criteria.CriteriaError as e:
+        raise HTTPException(409, str(e))
 
 
 # ---------- 평가 리포트 / 정답 공개 ----------

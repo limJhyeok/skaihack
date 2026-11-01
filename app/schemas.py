@@ -282,3 +282,71 @@ class MissedFactAnalysis(BaseModel):
 
 class RevealMissed(BaseModel):
     items: list[MissedFactAnalysis]
+
+
+# ---------- 정책 묶음 (docs/flow_drills_design.md 3절) ----------
+
+ValueType = Literal["int", "number", "str", "bool", "date", "time", "datetime", "choice", "list"]
+
+
+class FuncParam(BaseModel):
+    name: str                                # 파이썬 인자 이름
+    label: str                               # 화면에 보이는 한국어 이름
+    type: ValueType
+    options: list[str]                       # choice일 때만, 아니면 빈 배열
+
+
+class FuncReturn(BaseModel):
+    label: str
+    type: ValueType
+    options: list[str]
+
+
+class PolicyFunction(BaseModel):
+    name: str
+    summary: str                             # 무엇을 계산하는지만. 규칙 자체는 쓰지 않음
+    params: list[FuncParam]
+    returns: FuncReturn
+
+
+class ArgValue(BaseModel):
+    name: str
+    value: str
+
+
+class PolicyExample(BaseModel):
+    func: str
+    args: list[ArgValue]
+    expected: str
+    note: str                                # 이 예시가 확인하는 경계
+
+
+class PolicyItem(BaseModel):
+    id: str                                  # P1…
+    title: str
+    statement: str                           # 원자 단위 규칙 (출제자 말로 정확히)
+    location: str                            # 문서 속 위치 (섹션·표·부록·단서 조항)
+    doc_quote: str                           # 명세 문서 원문 그대로
+    kind: Literal["general", "counterintuitive", "constraint", "conflict"]
+    examples: list[PolicyExample]
+
+
+class CodeEdit(BaseModel):
+    find: str                                # 정답 구현에서 정확히 한 번 나오는 문자열
+    replace: str
+
+
+class PolicyDefect(BaseModel):
+    id: str                                  # D1…
+    policy_id: str
+    summary: str                             # 순진한 구현이 무엇을 잘못하나 (업무 쪽 사건)
+    edits: list[CodeEdit]
+
+
+class PolicyBundleOut(BaseModel):
+    title: str
+    spec_doc: str
+    functions: list[PolicyFunction]
+    policies: list[PolicyItem]
+    reference_code: str
+    defects: list[PolicyDefect]

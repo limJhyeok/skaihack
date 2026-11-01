@@ -24,6 +24,7 @@
       <button id="btn-new" class="card primary">새 모의고사<small>과제 출제 → 응시 → 리허설 → 리포트</small></button>
       <button id="btn-standalone" class="card">설명 리허설만 하기<small>임의의 로컬 저장소로 이해도 확인 문제</small></button>
       <button id="btn-drill" class="card">동작 추적 드릴<small>상황 하나 → 코드가 실제로 어떻게 동작하나 30~90초 예측 → 실행 결과와 즉시 대조</small></button>
+      <button id="btn-criteria" class="card">성공 기준 드릴<small>긴 명세 문서의 정책을 확인 예시(입력 → 기대 출력)로 → 정답 구현·결함 버전에 실행해 채점</small></button>
       <button id="btn-dashboard" class="card">기록 대시보드<small>지난 세션 점수 추이와 자주 놓치는 사실 유형</small></button>
     </div>
     <h2>세션</h2>
@@ -273,6 +274,50 @@
     <div class="row">
       <button class="ghost" data-go="home">홈으로</button>
       <button id="btn-ds-setup" class="primary">드릴 화면으로</button>
+    </div>
+  </section>
+
+  <section id="crit-setup" class="view narrow hidden">
+    <h1>성공 기준 드릴</h1>
+    <p class="muted">명세 문서와 함수 모양(입력·출력)만 보고, 정책을 확인할 <b>예시</b>를 적습니다. 예: 출근 5/13 22:00 · 퇴근 5/14 07:00 → 업무 기준일 5/13. 제출하면 예시를 <b>정답 구현</b>에 넣어 기대값이 맞는지(정책 이해 정확도), <b>정책을 하나씩 어긴 결함 버전</b>을 몇 개 잡는지(경계 사례 검출률)를 실행으로 채점합니다.</p>
+    <h2>정책 묶음</h2>
+    <p class="muted">명세 문서(A4 3~4장)·정책 목록·정답 구현·결함 버전을 한 번에 만들고, 정책 예시를 실제로 돌려 검증합니다. 같은 묶음은 나중에 다른 드릴(읽기·정리, AI 변경 검토)에도 씁니다.</p>
+    <div class="row"><button id="btn-bundle" class="primary">새 정책 묶음 만들기 (보통 2~5분)</button></div>
+    <p id="crit-bundle-status" class="muted"></p>
+    <label>제한 시간 <select id="crit-seconds">
+      <option value="1200">20분</option><option value="900">15분</option><option value="0">제한 없음</option>
+    </select></label>
+    <table class="list"><thead><tr><th>문서</th><th>정책·결함</th><th>푼 횟수</th><th>최고 검출률</th><th></th></tr></thead><tbody id="crit-bundles"></tbody></table>
+    <p id="crit-start-status" class="muted"></p>
+    <h2>지난 답안</h2>
+    <table class="list"><thead><tr><th>ID</th><th>문서</th><th>예시</th><th>정확도</th><th>검출률</th><th></th></tr></thead><tbody id="crit-sheets"></tbody></table>
+    <div class="row"><button type="button" class="ghost" data-go="home">홈으로</button></div>
+  </section>
+
+  <section id="crit-sheet" class="view full hidden">
+    <div class="rh-head"><h1 id="cs-title"></h1><span id="cs-timer" class="timer"></span></div>
+    <div class="crit-layout">
+      <div id="cs-doc" class="readme crit-doc"></div>
+      <div>
+        <p class="muted">함수마다 입력을 채우고 기대 출력을 적어 예시를 추가하세요. 경계(자정·기준 시각 직전/직후, 정원과 같을 때, 개정일 당일, 끝=시작, 동점)를 노리세요. 메모는 채점하지 않습니다.</p>
+        <div id="cs-funcs"></div>
+        <h2>내 예시 <span id="cs-count" class="muted"></span></h2>
+        <table class="list"><thead><tr><th>#</th><th>함수</th><th>입력</th><th>기대 출력</th><th>메모</th><th></th></tr></thead><tbody id="cs-rows"></tbody></table>
+        <p id="cs-status" class="muted"></p>
+        <div class="row">
+          <button id="btn-cs-leave" class="ghost">나가기 (저장됨)</button>
+          <button id="btn-cs-submit" class="primary">제출하고 채점</button>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section id="crit-result" class="view wide hidden">
+    <h1 id="cr-title"></h1>
+    <div id="cr-body"></div>
+    <div class="row">
+      <button class="ghost" data-go="home">홈으로</button>
+      <button id="btn-cr-setup" class="primary">드릴 화면으로</button>
     </div>
   </section>
 
