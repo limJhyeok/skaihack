@@ -831,6 +831,13 @@ async function openReveal() {
   b.append(listBlock("과설계 함정", rv.overengineering_traps), listBlock("담당자의 우선순위 혼란", rv.priority_confusion),
     listBlock("좋은 해법 기준 (평가자 참고)", rv.good_solution_criteria));
   if (rv.data_file_notes) b.append(kvList([["데이터 파일 메모", rv.data_file_notes]]));
+  if (rv.ai_fit) {
+    b.append(kvList([
+      ["AI 적합도", rv.ai_fit_label || rv.ai_fit],
+      ["기술 조건", rv.tech_requirement || "없음"],
+      ["숨은 사실 주제", (rv.themes || []).join(", ") || "-"],
+    ]));
+  }
   $("#retro").value = rv.retro_md;
   $("#retro-status").textContent = "";
   show("reveal");

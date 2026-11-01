@@ -11,7 +11,7 @@ from pathlib import Path
 from . import collector, dashboard, evaluate, generator, helper, persona, rehearsal, reveal, runner, sessions, submit, timer, workspace
 from .config import APP_ROOT, settings
 from .llm import LLMError
-from .schemas import Difficulty, ProblemPublic, Sealed, Session
+from .schemas import Difficulty, GeneratedProblem, ProblemPublic, Sealed, Session
 
 app = FastAPI(title="mockdrill")
 
@@ -27,7 +27,7 @@ class NewProblemRequest(BaseModel):
 def options():
     return {
         "domains": generator.DOMAINS,
-        "archetypes": [{"id": k, "description": v} for k, v in generator.ARCHETYPES.items()],
+        "archetypes": [{"id": k, "description": v["description"]} for k, v in generator.ARCHETYPES.items()],
         "difficulties": list(generator.DIFFICULTY),
     }
 
@@ -37,7 +37,8 @@ def new_problem(req: NewProblemRequest):
     if not settings.model_strong:
         raise HTTPException(500, "MOCK_MODEL_STRONG 환경변수가 설정되지 않았습니다.")
     try:
-        choice = generator.pick(req.domain, req.archetype, req.difficulty, req.seed, sessions.used_domains())
+        choice = generator.pick(req.domain, req.archetype, req.difficulty, req.seed, sessions.used_domains(),
+                                sessions.recent_archetypes())
         gen = generator.generate(choice)
     except ValueError as e:
         raise HTTPException(400, str(e))
@@ -50,7 +51,8 @@ def new_problem(req: NewProblemRequest):
         difficulty=choice["difficulty"], readme_markdown=gen.readme_markdown,
         data_files=gen.data_files, persona_public=gen.persona_public,
     )
-    sealed = Sealed(**gen.model_dump(include=set(Sealed.model_fields)))
+    sealed = Sealed(**gen.model_dump(include=set(GeneratedProblem.model_fields) & set(Sealed.model_fields)),
+                    ai_fit=choice["ai_fit"], tech_requirement=choice["tech_requirement"], themes=choice["themes"])
     ws = workspace.create(session_id, problem)
     session = Session(session_id=session_id, problem_id=problem_id, workspace_path=str(ws),
                       duration_min=settings.duration_min)

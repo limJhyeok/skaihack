@@ -9,6 +9,9 @@ from .schemas import RevealMissed
 TYPE_LABEL = {"ask_to_reveal": "물어야 나옴", "conflict": "자료와 충돌", "confirm_only": "확인만",
               "constraint": "제약·금지", "detail": "현장 디테일"}
 
+AI_FIT_LABEL = {"core": "LLM이 핵심 기능", "assist": "LLM은 선택적 보조 기능",
+                "unfit": "LLM이 맞지 않음 — 핵심 로직은 결정적으로 짜야 함"}
+
 
 class RevealError(RuntimeError):
     pass
@@ -57,6 +60,10 @@ def reveal(session_id: str) -> dict:
         "priority_confusion": sealed.priority_confusion,
         "good_solution_criteria": sealed.good_solution_criteria,
         "data_file_notes": sealed.data_file_notes,
+        "ai_fit": sealed.ai_fit,
+        "ai_fit_label": AI_FIT_LABEL.get(sealed.ai_fit, ""),
+        "tech_requirement": sealed.tech_requirement,
+        "themes": sealed.themes,
     }
     (d / "reveal.json").write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
     if not (d / "retro.md").exists():

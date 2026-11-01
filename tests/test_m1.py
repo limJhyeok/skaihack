@@ -81,7 +81,7 @@ def test_generate_prompt_has_no_unfilled_vars():
     text = prompts.load("generate_problem", domain="d", archetype="a", archetype_description="ad",
                         difficulty="easy", fact_count=6, conflict_count=0, constraint_count=1,
                         data_file_count=0, trap_count=2, example_readme="ex", retry_feedback="",
-                        duration_text="3시간")
+                        duration_text="3시간", ai_fit="af", tech_requirement="tr", themes="th")
     assert "{{" not in text
     assert "3시간" in text and "4시간" not in text
 
@@ -131,6 +131,40 @@ def test_pick_avoids_used_domains_and_respects_ranges():
     c = generator.pick(None, None, "hard", seed=1, used_domains=used)
     assert c["domain"] == generator.DOMAINS[-1]
     assert 13 <= c["facts"] <= 16 and c["constraint"] == 3
+
+
+def test_pick_avoids_recent_archetypes_and_sets_ai_fit():
+    recent = [a for a in generator.ARCHETYPES if a != "settlement_billing"][:3]
+    for seed in range(20):
+        c = generator.pick(None, None, "standard", seed=seed, used_domains=set(), recent_archetypes=recent)
+        assert c["archetype"] not in recent
+        assert c["ai_fit"] in generator.ARCHETYPES[c["archetype"]]["ai_fit"]
+        assert c["tech_requirement"] in generator.TECH_REQUIREMENTS
+        assert 1 <= len(c["themes"]) <= 4
+    c = generator.pick(None, "settlement_billing", "easy", seed=1, used_domains=set())
+    assert c["ai_fit"] == "unfit"
+
+
+def test_pick_skips_data_file_requirement_without_data_files():
+    for seed in range(50):
+        c = generator.pick(None, None, "easy", seed=seed, used_domains=set())
+        if c["data_files"] == 0:
+            assert not (c["tech_requirement"] or "").startswith("제공된 데이터")
+
+
+def test_generate_prompt_includes_choice(monkeypatch):
+    seen = {}
+
+    def fake_parse(**kw):
+        seen["system"] = kw["system"]
+        return problem()
+    monkeypatch.setattr(generator.llm, "parse", fake_parse)
+    c = generator.pick(None, "route_scheduling", "standard", seed=3, used_domains=set())
+    c["ai_fit"] = "unfit"
+    generator.generate(c)
+    assert "LLM을 쓰면 오히려 해가 되는" in seen["system"]
+    assert "공유 실험 장비 예약" in seen["system"]  # 업무 시스템 예시 README
+    assert c["themes"][0] in seen["system"]
 
 
 # ---------- 작업공간 ----------

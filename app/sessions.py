@@ -60,6 +60,12 @@ def used_domains() -> set[str]:
     return out
 
 
+def recent_archetypes() -> list[str]:
+    """최근 세션의 과제 유형, 최신순 (세션 ID가 생성 시각 순)."""
+    files = sorted(sessions_dir().glob("*/problem_public.json"), key=lambda f: f.parent.name, reverse=True)
+    return [json.loads(f.read_text(encoding="utf-8"))["archetype"] for f in files]
+
+
 # ---------- JSONL 기록 (chat.jsonl, helper_chat.jsonl, events.jsonl) ----------
 
 def now_iso() -> str:

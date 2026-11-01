@@ -42,6 +42,10 @@ class Sealed(BaseModel):
     good_solution_criteria: list[str]
     overengineering_traps: list[str]
     data_file_notes: str
+    # 출제 설정 (공개 전 숨김). 이전 세션에는 없어서 기본값을 둔다.
+    ai_fit: str = ""
+    tech_requirement: str | None = None
+    themes: list[str] = []
 
 
 class GeneratedProblem(BaseModel):
