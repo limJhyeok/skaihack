@@ -144,3 +144,5 @@ table.list th { white-space:nowrap; }
 .read-text { min-height:calc(100vh - 300px); font:14px/1.6 ui-monospace, monospace; resize:vertical; }
 .pol.partial { border-color:#c9a227; } .pol.misread { border-color:#ff5c5c; } .pol.missed { border-color:#ff5c5c; border-style:dashed; }
 .pol .mine { margin:4px 0; padding:4px 10px; border-left:3px solid var(--line); }
+.brand { background:none; border:0; padding:0; font:inherit; font-weight:700; color:inherit; cursor:pointer; }
+.brand:hover { color:var(--accent); }

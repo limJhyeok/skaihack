@@ -1873,6 +1873,28 @@ function showReadResult(v) {
   show("read-result");
 }
 
+// ---------- 상단 mockdrill 표시 → 홈 ----------
+
+// 시간이 흐르는 화면: 떠나도 서버 쪽 시간은 계속 흐르므로 확인을 받는다
+const TIMED_VIEWS = ["exam", "submit", "rehearsal", "drill-card", "crit-sheet", "read-sheet"];
+
+$("#brand").onclick = async () => {
+  const cur = [...$$(".view")].find((v) => !v.classList.contains("hidden"))?.id;
+  if (cur === "home") return;
+  if (TIMED_VIEWS.includes(cur) && !confirm("진행 중인 시간은 계속 흐릅니다. 홈으로 갈까요? (작성한 내용은 저장됩니다)")) return;
+  [rh, dc, cs, rs].forEach((o) => clearInterval(o.tick));
+  // 아직 저장 대기 중인 드릴 답안은 바로 저장
+  if (cur === "crit-sheet" && cs.sheet) {
+    clearTimeout(cs.saveTimer);
+    await api(`/api/criteria/sheets/${cs.sheet.sheet_id}/rows`, { method: "PUT", body: JSON.stringify({ rows: cs.rows }) }).catch(() => {});
+  }
+  if (cur === "read-sheet" && rs.sheet) {
+    clearTimeout(rs.saveTimer);
+    await saveReadText().catch(() => {});
+  }
+  show("home");
+};
+
 // ---------- 시작 ----------
 
 loadOptions();
