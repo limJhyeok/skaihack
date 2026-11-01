@@ -114,6 +114,20 @@ def _misconceptions(session_id: str) -> list[str]:
             if q.get("grade") and q["grade"].get("misconception")]
 
 
+def source_key(deck: dict) -> str:
+    """덱 재료 키: 세션 덱은 세션 ID, 새 문제 덱은 저장소 ID."""
+    s = deck["source"]
+    return s.get("key") or s["session_id"]
+
+
+def deck_root(deck: dict) -> Path | None:
+    s = deck["source"]
+    if s.get("kind") == "fresh":
+        root = Path(s["root"])
+        return root if root.is_dir() else None
+    return _session_root(s["session_id"])
+
+
 def sources() -> list[dict]:
     decks = _all("decks")
     out = []
@@ -125,8 +139,14 @@ def sources() -> list[dict]:
         except Exception:  # noqa: BLE001 — 표시용
             title = sid
         root = _session_root(sid)
-        mine = [x for x in decks if x["source"]["session_id"] == sid]
-        out.append({"session_id": sid, "label": title, "runnable": bool(root and probe.supported(root)),
+        mine = [x for x in decks if source_key(x) == sid]
+        out.append({"kind": "session", "key": sid, "session_id": sid, "label": title,
+                    "runnable": bool(root and probe.supported(root)),
+                    "cards": sum(len(x["cards"]) for x in mine), "decks": len(mine)})
+    for r in reversed(_all("repos")):
+        mine = [x for x in decks if source_key(x) == r["repo_id"]]
+        out.append({"kind": "fresh", "key": r["repo_id"], "session_id": None, "label": f"[새 문제] {r['title']}",
+                    "path": r["root"], "runnable": Path(r["root"]).is_dir(),
                     "cards": sum(len(x["cards"]) for x in mine), "decks": len(mine)})
     return out
 
@@ -288,16 +308,22 @@ def generate_deck(session_id: str, count: int = DEFAULT_CARDS) -> dict:
     root = _session_root(session_id)
     if root is None:
         raise CardError("제출 스냅샷이 없는 세션입니다.")
+    mis = _misconceptions(session_id)
+    source = {"kind": "session", "key": session_id, "session_id": session_id, "label": _label(session_id)}
+    return build_deck(root, source, count, "\n".join(f"- {m}" for m in mis) or "(없음)")
+
+
+def build_deck(root: Path, source: dict, count: int, focus: str,
+               focus_title: str = "응시자가 이 코드에 대해 전에 했던 오해 (우선 출제 대상)") -> dict:
+    """저장소 root로 카드를 출제·실행 검증해 덱을 저장한다. focus: 우선 출제 대상 (오해 목록 또는 심은 결함)."""
     if not probe.supported(root):
         raise CardError("Python 저장소만 실행 검증할 수 있습니다.")
     ctx = codectx.build(root)
     readme = next((ctx.read(n) for n in ("README.md", "readme.md") if ctx.read(n)), "(README 없음)")
-    existing = [c["scenario"] for d in _all("decks") if d["source"]["session_id"] == session_id for c in d["cards"]]
-    mis = _misconceptions(session_id)
-    focus = "\n".join(f"- {m}" for m in mis) or "(없음)"
+    existing = [c["scenario"] for d in _all("decks") if source_key(d) == source["key"] for c in d["cards"]]
     if existing:
         focus += "\n\n[이미 출제된 카드 상황 — 겹치지 말 것]\n" + "\n".join(f"- {s}" for s in existing)
-    system = prompts.load("card_generate", readme=readme[:6000], file_tree=ctx.tree_text(),
+    system = prompts.load("card_generate", readme=readme[:6000], focus_title=focus_title, file_tree=ctx.tree_text(),
                           key_files=ctx.key_files_text(), misconceptions=focus, count=count, probe_dir=probe.PROBE_DIR,
                           tags="\n".join(f"- {k}: {v}" for k, v in DEFECT_TAGS.items()))
     names = _code_names(ctx)
@@ -319,7 +345,7 @@ def generate_deck(session_id: str, count: int = DEFAULT_CARDS) -> dict:
                         f"폐기 사유: " + " / ".join(f"{d['id']}: {d['reason']}" for d in dropped)[:800])
     deck_id = _new_id("k")
     deck = {"deck_id": deck_id, "created_at": sessions.now_iso(),
-            "source": {"kind": "session", "session_id": session_id, "label": _label(session_id)},
+            "source": source,
             "cards": [{**c, "key": f"{deck_id}/{c['id']}"} for c in kept],
             "generation": {"requested": count, "verified": len(kept), "dropped": dropped}}
     _write("decks", deck_id, deck)
@@ -355,10 +381,11 @@ def _card_stats() -> dict[str, dict]:
     return st
 
 
-def create_run(mode: str, count: int, session_id: str | None = None, seconds: int | None = None) -> dict:
+def create_run(mode: str, count: int, source: str | None = None, seconds: int | None = None) -> dict:
+    """source: 재료 키(세션 ID 또는 새 문제 저장소 ID). None이면 전체."""
     if mode not in SECONDS:
         raise CardError("모드는 closed 또는 open입니다.")
-    pool = [(d, c) for d in _all("decks") if not session_id or d["source"]["session_id"] == session_id
+    pool = [(d, c) for d in _all("decks") if not source or source_key(d) == source
             for c in d["cards"]]
     st = _card_stats()
     pool = [(d, c) for d, c in pool if not st.get(c["key"], {}).get("flagged")]
@@ -406,9 +433,8 @@ def _left(run: dict, it: dict) -> int | None:
     return int(run["seconds"] - (datetime.now().astimezone() - datetime.fromisoformat(it["started_at"])).total_seconds())
 
 
-def _open_code(session_id: str, card: dict) -> list[dict]:
+def _open_code(root: Path | None, card: dict) -> list[dict]:
     """코드 보고 모드: 근거 파일 전체를 강조 없이 보여준다 (어느 줄인지 알려주지 않는다)."""
-    root = _session_root(session_id)
     if root is None:
         return []
     ctx = codectx.build(root)
@@ -446,7 +472,7 @@ def question_view(run: dict, it: dict) -> dict:
            "slots": [{k: s[k] for k in ("id", "prompt", "kind", "options")} for s in c["slots"]],
            "seconds": run["seconds"], "remaining_sec": None if left is None else max(0, left), "code": []}
     if run["mode"] == "open":
-        out["code"] = _open_code(deck["source"]["session_id"], c)
+        out["code"] = _open_code(deck_root(deck), c)
     return out
 
 
@@ -513,7 +539,7 @@ def result_view(run: dict, it: dict) -> dict:
         raise CardError("답한 뒤에 공개됩니다.")
     c = _card(it)
     deck = load_deck(it["deck_id"])
-    root = _session_root(deck["source"]["session_id"])
+    root = deck_root(deck)
     return {
         "n": it["n"], "total": len(run["items"]), "source_label": it["source_label"],
         "context": c.get("context", ""), "scenario": c["scenario"],
@@ -575,6 +601,7 @@ def list_runs() -> list[dict]:
 
 
 def deck_list() -> list[dict]:
-    return [{"deck_id": d["deck_id"], "label": d["source"]["label"], "session_id": d["source"]["session_id"],
+    return [{"deck_id": d["deck_id"], "label": d["source"]["label"], "key": source_key(d),
+             "session_id": d["source"].get("session_id"),
              "created_at": d["created_at"], "cards": len(d["cards"]), **d["generation"]}
             for d in reversed(_all("decks"))]

@@ -166,6 +166,25 @@ class GeneratedDeck(BaseModel):
     cards: list[GeneratedCard]
 
 
+class RepoFile(BaseModel):
+    path: str
+    content: str
+
+
+class PlantedDefect(BaseModel):
+    tag: str                                 # 결함 카탈로그 ID
+    location: str                            # "파일:줄" 또는 "파일:시작-끝"
+    behavior: str                            # 그 결함 때문에 실제로 일어나는 일 (사용자 쪽 사건)
+
+
+class FreshRepo(BaseModel):
+    """새 문제 드릴용 저장소 (docs/drill_design.md §6). 결함 사양은 저장소 밖(덱 출제 입력)에만 둔다."""
+    title: str
+    files: list[RepoFile]
+    planted: list[PlantedDefect]
+    bait: PlantedDefect                      # 위험해 보이지만 실제로는 안전한 코드 (tag는 "BAIT")
+
+
 class CardRepair(BaseModel):
     action: Literal["fix_probe", "accept_observed", "drop"]
     probe: str | None

@@ -24,11 +24,19 @@
 
 아래 §2–§5, §7–§10의 서술형 흐름(PREDICT·REVEAL·GAP·LLM 채점)은 폐기했다. 결함 카탈로그(§6.1)와 fresh 생성 계획(§6.2)은 카드 형식에 맞춰 이어서 쓴다.
 
+fresh (새 문제, `app/fresh.py`, `prompts/fresh_repo.md`, `tests/test_fresh.py`):
+
+- G1 사양(RNG): 업무 시스템 12종 중 최근 3개 저장소의 도메인을 피해 선택. 외부 모델 호출은 필수인 2종 외에는 30% 확률. 결함 2~3개는 최근 30일 드릴의 `missed_tags` 빈도 + 1 가중치로 뽑고, LOST_UPDATE·TZ_BOUNDARY·CAPACITY_EDGE 중 1개는 반드시 넣는다. 서버 실행으로 관찰할 수 없는 패턴(SYNC_BLOCK, STALE_RESPONSE, RESEND_ORIGINAL, CLIENT_STATE_LEAK, READ_THEN_LIMIT, WEAK_TEST)은 제외. FAIL_ALL_PENDING은 외부 호출이 있을 때만.
+- G2~G3: LLM이 저장소 파일·심은 결함 위치·미끼를 출력 → 코드 검사(필수 파일, 파일 10개·코드 700줄 이하, 의존성 화이트리스트, 결함 단서 단어·태그 ID 금지, README 0.0.0.0, 사양의 결함이 모두 planted에 있음) → `MOCK_WORKSPACE_ROOT/drills/<repo_id>/`에 쓰고 probe와 같은 격리 환경으로 저장소 테스트 실행 → 실패 사유를 피드백해 최대 3회 → git 초기 커밋. 설계안의 "파일 8개·600줄"은 `__init__.py`·static 여유를 두어 10개·700줄로 완화.
+- G4~G6: 기존 `cards.build_deck`에 심은 결함·미끼를 우선 출제 대상으로 넘긴다. 결함 사양은 `data/drills/repos/<repo_id>/repo.json`에만 있고 저장소에는 없다.
+- STUDY 화면은 만들지 않았다. 저장소를 에디터로 15분 읽고 코드 닫고 모드로 푸는 방식 (실전도 자기 에디터로 코드를 본다).
+- 첫 실측 (구민 체육센터, 결함 CAPACITY_EDGE·EMPTY_AS_SUCCESS·PARSE_FAIL_KEEPS_STATE, 외부 호출 있음): 저장소 1회 만에 통과(86초, 파일 8개·272줄), 카드 8장 출제·8장 검증 통과(미끼 카드 1장 포함), 총 161초. 저장소에 결함 단서 없음, CONTEXT.md에 결함이 어긴 요구가 [담당자 확정]으로 적혀 있음.
+- 관찰된 한계: 출제자가 결함 위치를 알고 출제하므로 surprise(출제자 예상이 틀린 카드)가 거의 없다. value 칸 일부가 상태 문자열("enrolled", "unchanged")을 그대로 쓰게 해 추론보다 기억을 묻는다. 생성 5회 중 4회 성공 기준은 1회만 확인.
+
 남은 일:
-1. fresh: 처음 보는 저장소를 생성해 같은 카드 형식으로 출제 (DR-1, DR-4 유지)
-2. 카드 위에 서술형 1문항 얹기 (추적한 사실을 약점→파급→계획으로 연결)
-3. Node 스냅샷 지원
-4. 대시보드 지표
+1. 카드 위에 서술형 1문항 얹기 (추적한 사실을 약점→파급→계획으로 연결)
+2. Node 스냅샷 지원
+3. 대시보드 지표
 
 ## 0. 배경과 목표
 

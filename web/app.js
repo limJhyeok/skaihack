@@ -1030,7 +1030,12 @@ async function openDrillSetup() {
   sel.length = 1;
   for (const s of d.sources) {
     const tr = el("tr");
-    tr.append(el("td", "", s.label), el("td", "", s.runnable ? "가능" : "불가 (Python 아님)"), el("td", "", `${s.cards}장`));
+    const name = el("td", "", s.label);
+    if (s.path) {
+      name.append(el("br"), el("code", "", s.path));
+    }
+    const runnable = s.runnable ? "가능" : s.kind === "fresh" ? "불가 (저장소 없음)" : "불가 (Python 아님)";
+    tr.append(name, el("td", "", runnable), el("td", "", `${s.cards}장`));
     const td = el("td");
     if (s.runnable) {
       const b = el("button", "", s.cards ? "카드 더 만들기" : "카드 만들기");
@@ -1039,7 +1044,7 @@ async function openDrillSetup() {
     }
     tr.append(td);
     tb.append(tr);
-    if (s.cards) sel.add(new Option(`${s.label} — ${s.cards}장`, s.session_id));
+    if (s.cards) sel.add(new Option(`${s.label} — ${s.cards}장`, s.key));
   }
   const rb = $("#drill-runs");
   rb.innerHTML = "";
@@ -1061,7 +1066,7 @@ async function generateDeck(s, btn) {
   btn.disabled = true;
   try {
     const r = await withProgress($("#drill-gen-status"), `${s.label}: 카드 출제 → 실행 검증 중… (보통 2~5분)`,
-      post("/api/drills/decks", { session_id: s.session_id }));
+      post("/api/drills/decks", s.kind === "fresh" ? { repo_id: s.key } : { session_id: s.session_id }));
     const g = r.generation;
     await openDrillSetup();
     $("#drill-gen-status").textContent = `카드 ${g.requested}장 출제 → 실행 검증 통과 ${g.verified}장 (폐기 ${g.dropped.length}장)`;
@@ -1070,6 +1075,24 @@ async function generateDeck(s, btn) {
     btn.disabled = false;
   }
 }
+
+$("#btn-fresh").onclick = async () => {
+  const btn = $("#btn-fresh");
+  btn.disabled = true;
+  try {
+    const r = await withProgress($("#drill-fresh-status"), "저장소 생성 → 테스트 → 카드 출제 → 실행 검증 중…",
+      post("/api/drills/fresh", {}));
+    const g = r.generation;
+    await openDrillSetup();
+    $("#drill-fresh-status").textContent =
+      `"${r.title}" 저장소: ${r.root} — 카드 ${g.requested}장 출제 → 검증 통과 ${g.verified}장. 저장소를 15분 읽은 뒤 위 재료를 골라 드릴을 시작하세요.`;
+    $("#form-run").session_id.value = r.repo_id;
+  } catch (err) {
+    $("#drill-fresh-status").textContent = `생성 실패: ${err.message}`;
+  } finally {
+    btn.disabled = false;
+  }
+};
 
 $("#form-run").onsubmit = async (e) => {
   e.preventDefault();

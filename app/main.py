@@ -8,7 +8,7 @@ from pydantic import BaseModel
 import json
 from pathlib import Path
 
-from . import cards, collector, dashboard, evaluate, generator, helper, persona, rehearsal, reveal, runner, sessions, submit, timer, workspace
+from . import cards, collector, dashboard, evaluate, fresh, generator, helper, persona, rehearsal, reveal, runner, sessions, submit, timer, workspace
 from .config import APP_ROOT, settings
 from .llm import LLMError
 from .schemas import Difficulty, GeneratedProblem, ProblemPublic, Sealed, Session
@@ -293,14 +293,20 @@ def _rehearsal_call(fn):
 # ---------- 동작 추적 카드 드릴 (docs/drill_design.md) ----------
 
 class DeckCreate(BaseModel):
-    session_id: str
+    session_id: str | None = None
+    repo_id: str | None = None   # 새 문제 저장소
     count: int = cards.DEFAULT_CARDS
+
+
+class FreshCreate(BaseModel):
+    count: int = cards.DEFAULT_CARDS
+    seed: int | None = None
 
 
 class RunCreate(BaseModel):
     mode: Literal["closed", "open"] = "closed"
     count: int = 10
-    session_id: str | None = None
+    session_id: str | None = None  # 재료 키: 세션 ID 또는 새 문제 저장소 ID
 
 
 class CardAnswer(BaseModel):
@@ -315,11 +321,30 @@ def drill_sources():
 
 @app.post("/api/drills/decks")
 def create_deck(req: DeckCreate):
-    _load(req.session_id)
     if not 3 <= req.count <= 12:
         raise HTTPException(400, "카드 수는 3~12입니다.")
-    deck = _card_call(lambda: cards.generate_deck(req.session_id, req.count))
+    if req.repo_id:
+        try:
+            fresh.load(req.repo_id)
+        except (FileNotFoundError, ValueError):
+            raise HTTPException(404, "저장소를 찾을 수 없습니다.")
+        deck = _card_call(lambda: fresh.build_deck(req.repo_id, req.count))
+    elif req.session_id:
+        _load(req.session_id)
+        deck = _card_call(lambda: cards.generate_deck(req.session_id, req.count))
+    else:
+        raise HTTPException(400, "session_id 또는 repo_id가 필요합니다.")
     return {k: deck[k] for k in ("deck_id", "generation")}
+
+
+@app.post("/api/drills/fresh")
+def create_fresh(req: FreshCreate):
+    if not 3 <= req.count <= 12:
+        raise HTTPException(400, "카드 수는 3~12입니다.")
+    try:
+        return _card_call(lambda: fresh.create(req.count, req.seed))
+    except fresh.FreshError as e:
+        raise HTTPException(502, str(e))
 
 
 @app.post("/api/drills/runs")

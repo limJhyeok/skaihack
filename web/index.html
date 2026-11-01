@@ -226,8 +226,12 @@
   <section id="drill-setup" class="view narrow hidden">
     <h1>동작 추적 드릴</h1>
     <p class="muted">카드마다 상황 하나가 주어지고, 그때 서버 코드가 실제로 내는 결과(상태 코드·응답 값·저장 상태·외부 호출 횟수 등)를 고릅니다. 정답은 상황을 주입해 <b>코드를 실제로 실행한 관찰값</b>입니다.</p>
+    <h2>새 문제</h2>
+    <p class="muted">처음 보는 작은 업무 시스템 저장소(FastAPI)를 만들고, 거기에 심은 결함·미끼로 카드를 출제합니다. 내가 최근 자주 틀린 결함 패턴이 더 자주 나옵니다. 만든 뒤 <b>저장소를 에디터로 15분 읽고</b> 코드 닫고 모드로 푸세요.</p>
+    <div class="row"><button id="btn-fresh" class="primary">새 문제 만들기 (보통 4~8분)</button></div>
+    <p id="drill-fresh-status" class="muted"></p>
     <h2>카드 재료</h2>
-    <table class="list"><thead><tr><th>세션</th><th>실행 검증</th><th>카드</th><th></th></tr></thead><tbody id="drill-sources"></tbody></table>
+    <table class="list"><thead><tr><th>재료</th><th>실행 검증</th><th>카드</th><th></th></tr></thead><tbody id="drill-sources"></tbody></table>
     <p id="drill-gen-status" class="muted"></p>
     <h2>드릴 시작</h2>
     <form id="form-run">
