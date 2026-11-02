@@ -26,6 +26,8 @@
       <button id="btn-drill" class="card">동작 추적 드릴<small>상황 하나 → 코드가 실제로 어떻게 동작하나 30~90초 예측 → 실행 결과와 즉시 대조</small></button>
       <button id="btn-reading" class="card">읽기·정리 드릴<small>긴 명세 문서를 읽고 요구사항 목록 작성 → 숨은 정책 목록과 대조해 누락·잘못 해석·지어낸 것 판정</small></button>
       <button id="btn-criteria" class="card">성공 기준 드릴<small>긴 명세 문서의 정책을 확인 예시(입력 → 기대 출력)로 → 정답 구현·결함 버전에 실행해 채점</small></button>
+      <button id="btn-review" class="card">AI 변경 검토 드릴<small>에이전트가 방금 짠 코드 + 관련 요구사항 → 위반 여부·어긴 정책·줄을 장당 2~3분에 판정 → 즉시 채점</small></button>
+      <button id="btn-change" class="card">변경 대응 드릴<small>시험 중간의 정책 변경 공지 → 고칠 요구사항·성공 기준 예시(새 기대값)·코드 위치 고르기 → 실행 결과와 대조</small></button>
       <button id="btn-dashboard" class="card">기록 대시보드<small>지난 세션 점수 추이와 자주 놓치는 사실 유형</small></button>
     </div>
     <h2>세션</h2>
@@ -353,6 +355,95 @@
       <button id="btn-rr-setup" class="primary">드릴 화면으로</button>
     </div>
   </section>
+
+  <section id="rev-setup" class="view narrow hidden">
+    <h1>AI 변경 검토 드릴</h1>
+    <p class="muted">"에이전트가 방금 작성한 코드"와 그 코드에 걸린 요구사항을 보고, 요구사항을 어겼는지 판정합니다. 어겼다면 어긴 요구사항과 줄을 고릅니다. 카드는 정책 묶음의 정답 구현 또는 결함 버전에서 나오며, 한 묶음에서 같은 함수는 한 번만 나옵니다. 정답은 미리 정해져 있어 바로 채점합니다 (LLM 없음).</p>
+    <p class="muted">같은 정책 묶음으로 성공 기준 드릴(B)이나 읽기 드릴(A)을 끝냈다면 결과 화면에서 결함 요약을 이미 본 것입니다. "푼 드릴" 칸을 보고 고르세요.</p>
+    <div class="row"><button id="btn-rev-bundle" class="primary">새 정책 묶음 만들기 (보통 2~5분)</button></div>
+    <p id="rev-bundle-status" class="muted"></p>
+    <table class="list"><thead><tr><th>문서</th><th>결함</th><th>검토한 결함</th><th>푼 드릴</th><th></th></tr></thead><tbody id="rev-bundles"></tbody></table>
+    <p id="rev-start-status" class="muted"></p>
+    <h2>지난 검토</h2>
+    <table class="list"><thead><tr><th>ID</th><th>문서</th><th>카드</th><th>모두 맞음</th><th>결함 발견</th><th>오경보</th><th></th></tr></thead><tbody id="rev-decks"></tbody></table>
+    <div class="row"><button type="button" class="ghost" data-go="home">홈으로</button></div>
+  </section>
+
+  <section id="rev-card" class="view wide hidden">
+    <div class="rh-head"><h1 id="rv-progress"></h1><span id="rv-timer" class="timer"></span></div>
+    <p id="rv-agent" class="context"></p>
+    <div id="rv-ask" class="crit-layout">
+      <div>
+        <p class="muted">위반이라고 보면 문제가 되는 줄을 클릭하세요.</p>
+        <div id="rv-code"></div>
+      </div>
+      <div>
+        <h2>관련 요구사항</h2>
+        <div id="rv-policies"></div>
+        <div class="slot">
+          <label><input type="radio" name="rv-verdict" value="ok"> 요구사항 위반 없음 (받아들임)</label>
+          <label><input type="radio" name="rv-verdict" value="violation"> 위반 있음 → 위에서 요구사항, 왼쪽에서 줄 선택</label>
+          <p id="rv-pick" class="muted"></p>
+        </div>
+        <div class="row"><button id="btn-rv-submit" class="primary">제출</button></div>
+        <p id="rv-status" class="muted"></p>
+        <details><summary>명세 문서</summary><div id="rv-doc" class="readme"></div></details>
+      </div>
+    </div>
+    <div id="rv-result"></div>
+  </section>
+
+  <section id="rev-summary" class="view wide hidden">
+    <h1 id="rvs-title"></h1>
+    <div id="rvs-body"></div>
+    <div class="row">
+      <button class="ghost" data-go="home">홈으로</button>
+      <button id="btn-rev-setup" class="primary">드릴 화면으로</button>
+    </div>
+  </section>
+
+  <section id="chg-setup" class="view narrow hidden">
+    <h1>변경 대응 드릴</h1>
+    <p class="muted">시험 중간에 현업이 보낸 정책 변경 공지를 받습니다. 지금까지 쌓은 요구사항(정책 목록), 성공 기준 예시, 코드 가운데 <b>고쳐야 하는 것</b>을 고르고, 값이 바뀌는 예시에는 새 기대값을 적습니다. 정답은 변경을 정답 구현에 적용해 모든 예시를 실제로 실행한 결과입니다 (LLM 채점 없음).</p>
+    <p class="muted">변경 공지는 묶음마다 처음 시작할 때 한 번 출제합니다 (보통 1~3분). 정책 목록·예시·코드를 모두 보여 주므로, 이 드릴을 한 묶음은 다른 드릴에서 "이미 봄"으로 표시됩니다.</p>
+    <div class="row"><button id="btn-chg-bundle" class="primary">새 정책 묶음 만들기 (보통 2~5분)</button></div>
+    <p id="chg-bundle-status" class="muted"></p>
+    <table class="list"><thead><tr><th>문서</th><th>변경 공지</th><th>푼 횟수</th><th>푼 드릴</th><th></th></tr></thead><tbody id="chg-bundles"></tbody></table>
+    <p id="chg-start-status" class="muted"></p>
+    <h2>지난 풀이</h2>
+    <table class="list"><thead><tr><th>ID</th><th>문서</th><th>카드</th><th>모두 맞음</th><th>요구사항</th><th>예시</th><th>코드</th><th></th></tr></thead><tbody id="chg-resps"></tbody></table>
+    <div class="row"><button type="button" class="ghost" data-go="home">홈으로</button></div>
+  </section>
+
+  <section id="chg-card" class="view wide hidden">
+    <div class="rh-head"><h1 id="cg-progress"></h1><span id="cg-timer" class="timer"></span></div>
+    <div id="cg-notice" class="rh-question"></div>
+    <div id="cg-ask">
+      <h2>1. 고칠 요구사항</h2>
+      <p class="muted">문구나 기대 동작이 바뀌는 요구사항을 모두 고르세요.</p>
+      <div id="cg-policies"></div>
+      <h2>2. 다시 볼 성공 기준 예시</h2>
+      <p class="muted">기대값이 바뀌는 예시를 고르고 새 기대값을 적으세요. 그대로인 예시는 고르지 않습니다.</p>
+      <table class="list"><thead><tr><th></th><th>정책</th><th>입력</th><th>지금 기대값</th><th>새 기대값</th></tr></thead><tbody id="cg-examples"></tbody></table>
+      <h2>3. 고칠 코드 위치</h2>
+      <div id="cg-chunks"></div>
+      <details><summary>지금 코드 전체</summary><div id="cg-code"></div></details>
+      <div class="row"><button id="btn-cg-submit" class="primary">제출</button></div>
+      <p id="cg-status" class="muted"></p>
+      <details><summary>명세 문서 (변경 전)</summary><div id="cg-doc" class="readme"></div></details>
+    </div>
+    <div id="cg-result"></div>
+  </section>
+
+  <section id="chg-summary" class="view wide hidden">
+    <h1 id="cgs-title"></h1>
+    <div id="cgs-body"></div>
+    <div class="row">
+      <button class="ghost" data-go="home">홈으로</button>
+      <button id="btn-chg-setup" class="primary">드릴 화면으로</button>
+    </div>
+  </section>
+
 
   <section id="crit-result" class="view wide hidden">
     <h1 id="cr-title"></h1>

@@ -352,6 +352,25 @@ class PolicyBundleOut(BaseModel):
     defects: list[PolicyDefect]
 
 
+# ---------- D. 변경 대응 드릴: 정책 변경 출제 (docs/flow_drills_design.md 4절) ----------
+
+class ChangedStatement(BaseModel):
+    policy_id: str
+    statement: str                           # 바뀐 뒤 규칙
+
+
+class PolicyChangeItem(BaseModel):
+    id: str                                  # C1…
+    title: str                               # 공지 제목
+    notice: str                              # 현업이 보낸 변경 공지 (업무 말)
+    changed_policies: list[ChangedStatement]
+    edits: list[CodeEdit]                    # 정답 구현을 새 정책에 맞게 고치는 치환
+
+
+class PolicyChangesOut(BaseModel):
+    changes: list[PolicyChangeItem]
+
+
 # ---------- A. 읽기·정리 드릴 채점 (docs/flow_drills_design.md 4절) ----------
 
 class ReadingPolicyJudge(BaseModel):

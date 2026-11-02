@@ -172,11 +172,14 @@ def view(sheet: dict) -> dict:
 
 def overview() -> dict:
     sheets = cards._all("sheets")
+    done = policy.drills_done()
     bundles = []
     for b in reversed(policy.all_bundles()):
         mine = [s for s in sheets if s["bundle_id"] == b["bundle_id"] and s["status"] == "done"]
         best = max((s["result"]["summary"]["coverage"] or 0 for s in mine), default=None)
-        bundles.append({**policy.summary(b), "sheets": len(mine), "best_coverage": best})
+        # A·C·D 결과 화면에서 정책 목록·예시를 이미 봤다
+        bundles.append({**policy.summary(b), "sheets": len(mine), "best_coverage": best,
+                        "seen": bool(done.get(b["bundle_id"], set()) - {"B"})})
     titles = {b["bundle_id"]: b["title"] for b in bundles}
     rows = []
     for s in reversed(sheets):

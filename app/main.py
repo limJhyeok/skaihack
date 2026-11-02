@@ -8,7 +8,7 @@ from pydantic import BaseModel
 import json
 from pathlib import Path
 
-from . import cards, collector, criteria, dashboard, evaluate, fresh, generator, helper, persona, policy, reading, rehearsal, reveal, runner, sessions, submit, timer, workspace
+from . import cards, change, collector, criteria, dashboard, evaluate, fresh, generator, helper, persona, policy, reading, rehearsal, reveal, review, runner, sessions, submit, timer, workspace
 from .config import APP_ROOT, settings
 from .llm import LLMError
 from .schemas import Difficulty, GeneratedProblem, ProblemPublic, Sealed, Session
@@ -542,6 +542,131 @@ def _reading_call(fn):
         raise HTTPException(409, str(e))
     except LLMError as e:
         raise HTTPException(502, f"채점 실패 (답안은 저장됨, 다시 제출하세요): {e}")
+
+
+# ---------- C. AI 변경 검토 드릴 (docs/flow_drills_design.md 4절) ----------
+
+class ReviewCreate(BaseModel):
+    bundle_id: str
+    seed: int | None = None
+
+
+class ReviewAnswer(BaseModel):
+    verdict: Literal["ok", "violation"]
+    policy_id: str | None = None
+    line: int | None = None
+
+
+@app.get("/api/review")
+def review_overview():
+    return review.overview()
+
+
+@app.post("/api/review/decks")
+def create_review(req: ReviewCreate):
+    try:
+        rv = review.create(req.bundle_id, req.seed)
+    except (FileNotFoundError, ValueError):
+        raise HTTPException(404, "정책 묶음을 찾을 수 없습니다.")
+    return review.view(rv["review_id"])
+
+
+@app.get("/api/review/decks/{review_id}")
+def get_review(review_id: str):
+    _load_review(review_id)
+    return review.view(review_id)
+
+
+@app.post("/api/review/decks/{review_id}/cards/{n}/answer")
+def answer_review(review_id: str, n: int, req: ReviewAnswer):
+    _load_review(review_id)
+    return _review_call(lambda: review.answer(review_id, n, req.verdict, req.policy_id, req.line))
+
+
+@app.get("/api/review/decks/{review_id}/cards/{n}/result")
+def review_card_result(review_id: str, n: int):
+    _load_review(review_id)
+    return _review_call(lambda: review.card_result(review_id, n))
+
+
+def _load_review(review_id: str) -> dict:
+    try:
+        return review.load(review_id)
+    except (FileNotFoundError, ValueError):
+        raise HTTPException(404, "검토 묶음을 찾을 수 없습니다.")
+
+
+def _review_call(fn):
+    try:
+        return fn()
+    except review.ReviewError as e:
+        raise HTTPException(409, str(e))
+
+
+# ---------- D. 변경 대응 드릴 (docs/flow_drills_design.md 4절) ----------
+
+class ResponseCreate(BaseModel):
+    bundle_id: str
+
+
+class ResponseAnswer(BaseModel):
+    policies: list[str] = []
+    examples: dict[str, str] = {}      # 예시 id → 새 기대값
+    chunks: list[str] = []
+
+
+@app.get("/api/change")
+def change_overview():
+    return change.overview()
+
+
+@app.post("/api/change/responses")
+def create_response(req: ResponseCreate):
+    try:
+        b = policy.load(req.bundle_id)
+    except (FileNotFoundError, ValueError):
+        raise HTTPException(404, "정책 묶음을 찾을 수 없습니다.")
+    if not b.get("changes") and not settings.model_strong:
+        raise HTTPException(500, "MOCK_MODEL_STRONG 환경변수가 설정되지 않았습니다.")
+    try:
+        resp = change.create(req.bundle_id)
+    except change.ChangeError as e:
+        raise HTTPException(502, str(e))
+    except LLMError as e:
+        raise HTTPException(502, str(e))
+    return change.view(resp["response_id"])
+
+
+@app.get("/api/change/responses/{response_id}")
+def get_response(response_id: str):
+    _load_response(response_id)
+    return change.view(response_id)
+
+
+@app.post("/api/change/responses/{response_id}/cards/{n}/answer")
+def answer_response(response_id: str, n: int, req: ResponseAnswer):
+    _load_response(response_id)
+    return _change_call(lambda: change.answer(response_id, n, req.policies, req.examples, req.chunks))
+
+
+@app.get("/api/change/responses/{response_id}/cards/{n}/result")
+def response_card_result(response_id: str, n: int):
+    _load_response(response_id)
+    return _change_call(lambda: change.card_result(response_id, n))
+
+
+def _load_response(response_id: str) -> dict:
+    try:
+        return change.load(response_id)
+    except (FileNotFoundError, ValueError):
+        raise HTTPException(404, "풀이를 찾을 수 없습니다.")
+
+
+def _change_call(fn):
+    try:
+        return fn()
+    except change.ChangeError as e:
+        raise HTTPException(409, str(e))
 
 
 # ---------- 평가 리포트 / 정답 공개 ----------

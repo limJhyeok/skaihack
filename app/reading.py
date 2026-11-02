@@ -183,17 +183,14 @@ def view(sheet: dict) -> dict:
 
 def overview() -> dict:
     reads = cards._all("reads")
-    crit = {}
-    for s in cards._all("sheets"):
-        if s["status"] == "done":
-            crit[s["bundle_id"]] = crit.get(s["bundle_id"], 0) + 1
+    done = policy.drills_done()
     bundles = []
     for b in reversed(policy.all_bundles()):
         mine = [r for r in reads if r["bundle_id"] == b["bundle_id"] and r["status"] == "done"]
         best = max((r["result"]["summary"]["recall"] or 0 for r in mine), default=None)
-        # 다른 드릴(B)을 끝냈으면 결과 화면에서 정책 목록을 이미 봤다
+        # 다른 드릴(B·C·D)을 했으면 정책 목록을 이미 봤다
         bundles.append({**policy.summary(b), "reads": len(mine), "best_recall": best,
-                        "seen": bool(mine) or crit.get(b["bundle_id"], 0) > 0})
+                        "seen": bool(mine) or bool(done.get(b["bundle_id"], set()) - {"A"})})
     titles = {b["bundle_id"]: b["title"] for b in bundles}
     rows = []
     for r in reversed(reads):

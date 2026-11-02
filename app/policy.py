@@ -10,6 +10,7 @@ P1 사양(도메인·설계 개념, RNG) → P2 출제(LLM: 명세 문서·함�
 저장: data/drills/bundles/<bundle_id>/bundle.json
 """
 import ast
+import difflib
 import json
 import random
 import re
@@ -359,3 +360,127 @@ def summary(bundle: dict) -> dict:
             "concepts": [generator.CONCEPTS[c]["name"] for c in bundle["spec"]["concepts"]],
             "doc_chars": len(bundle["spec_doc"]), "functions": len(bundle["functions"]),
             "policies": len(bundle["policies"]), "defects": len(bundle["defects"])}
+
+
+# ---------- 예시·코드 조각 (C·D 드릴 공통) ----------
+
+def policy_examples(bundle: dict) -> list[dict]:
+    """정책 예시 전부: [{eid, policy_id, func, args, expected(정규형), note, call, case}]. 묶음은 이미 검증됨."""
+    fns = {f["name"]: f for f in bundle["functions"]}
+    out = []
+    for p in bundle["policies"]:
+        for i, ex in enumerate(p["examples"], 1):
+            eid = f"{p['id']}.{i}"
+            fn = fns[ex["func"]]
+            args = {a["name"]: a["value"] for a in ex["args"]}
+            out.append({"eid": eid, "policy_id": p["id"], "func": ex["func"], "args": args,
+                        "expected": expected_of(fn, ex["expected"]), "note": ex["note"],
+                        "call": example_label(fn, args), "case": make_case(eid, fn, args)})
+    return out
+
+
+def chunks(code: str) -> list[dict]:
+    """모듈 최상위 정의(함수·상수·클래스)와 줄 범위(1부터). import·문서 문자열은 뺀다.
+    refs: 이 정의가 참조하는 다른 이름 (호출·상수 의존 추적용)."""
+    out = []
+    for node in ast.parse(code).body:
+        if isinstance(node, (ast.Import, ast.ImportFrom)) or (
+                isinstance(node, ast.Expr) and isinstance(node.value, ast.Constant)):
+            continue
+        start = min([node.lineno] + [d.lineno for d in getattr(node, "decorator_list", [])])
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            names, kind = [node.name], "class" if isinstance(node, ast.ClassDef) else "func"
+        elif isinstance(node, (ast.Assign, ast.AnnAssign, ast.AugAssign)):
+            targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+            names = [n.id for t in targets for n in ast.walk(t) if isinstance(n, ast.Name)]
+            kind = "const"
+        else:
+            names, kind = [], "other"
+        refs = {n.id for n in ast.walk(node) if isinstance(n, ast.Name)} - set(names)
+        out.append({"name": names[0] if names else f"{start}행", "names": names, "kind": kind,
+                    "start": start, "end": node.end_lineno, "refs": sorted(refs)})
+    return out
+
+
+def changed_lines(ref: str, var: str) -> list[int]:
+    """var 쪽에서 ref와 달라진 줄 번호. 줄이 지워지기만 한 곳은 지워진 자리 앞뒤 줄을 표시한다."""
+    a, b = ref.splitlines(), var.splitlines()
+    out: set[int] = set()
+    for tag, _i1, _i2, j1, j2 in difflib.SequenceMatcher(None, a, b, autojunk=False).get_opcodes():
+        if tag in ("replace", "insert"):
+            out.update(range(j1 + 1, j2 + 1))
+        elif tag == "delete":
+            out.update(x for x in (j1, j1 + 1) if 1 <= x <= len(b))
+    return sorted(out)
+
+
+def touched_chunks(code: str, lines: list[int]) -> list[str]:
+    """줄 번호가 속한 최상위 정의 이름 (모듈 순서). 정의 밖 줄은 바로 앞 정의로 본다."""
+    chs = chunks(code)
+    hit = []
+    for ln in lines:
+        inside = [c for c in chs if c["start"] <= ln <= c["end"]]
+        before = [c for c in chs if c["end"] < ln]
+        c = inside[0] if inside else (before[-1] if before else (chs[0] if chs else None))
+        if c and c["name"] not in hit:
+            hit.append(c["name"])
+    order = [c["name"] for c in chs]
+    return sorted(hit, key=order.index)
+
+
+def reach(code: str) -> dict[str, set[str]]:
+    """정의마다 직간접으로 의존하는 최상위 정의 이름 (자기 포함)."""
+    chs = {c["name"]: c for c in chunks(code)}
+    owner = {n: c["name"] for c in chs.values() for n in c["names"]}
+    deps = {name: {owner[r] for r in c["refs"] if r in owner} for name, c in chs.items()}
+    out = {}
+    for name in chs:
+        seen, stack = {name}, [name]
+        while stack:
+            for d in deps[stack.pop()]:
+                if d not in seen:
+                    seen.add(d)
+                    stack.append(d)
+        out[name] = seen
+    return out
+
+
+def related_policies(bundle: dict, names: set[str], code: str | None = None) -> list[str]:
+    """이 정의들에 결과가 달린 정책: 예시의 함수가 이 정의를 직간접으로 쓰는 정책 (id 순서)."""
+    r = reach(code or bundle["reference_code"])
+    out = []
+    for p in bundle["policies"]:
+        if any(names & r.get(ex["func"], {ex["func"]}) for ex in p["examples"]):
+            out.append(p["id"])
+    return out
+
+
+def snippet(code: str, names: list[str], hits: list[int] = ()) -> list[dict]:
+    """화면용 코드 조각: 정의마다 {name, start, end, lines:[{n, text, hit}]}."""
+    lines = code.splitlines()
+    hs = set(hits)
+    out = []
+    for c in chunks(code):
+        if c["name"] in names:
+            out.append({"name": c["name"], "start": c["start"], "end": c["end"],
+                        "lines": [{"n": n, "text": lines[n - 1], "hit": n in hs}
+                                  for n in range(c["start"], c["end"] + 1)]})
+    return out
+
+
+def policy_ref(p: dict) -> dict:
+    return {"id": p["id"], "title": p["title"], "statement": p["statement"], "location": p["location"],
+            "doc_quote": p["doc_quote"], "kind": p["kind"], "kind_label": KIND_LABEL[p["kind"]]}
+
+
+def drills_done() -> dict[str, set[str]]:
+    """묶음마다 끝낸 드릴 (A 읽기, B 성공 기준, C 변경 검토, D 변경 대응). 결과 화면에서 정답 재료를 본 것."""
+    out: dict[str, set[str]] = {}
+    for kind, tag, done in (("reads", "A", lambda x: x["status"] == "done"),
+                            ("sheets", "B", lambda x: x["status"] == "done"),
+                            ("reviews", "C", lambda x: any(c.get("answer") for c in x["cards"])),
+                            ("responses", "D", lambda x: any(c.get("answer") for c in x["cards"]))):
+        for x in cards._all(kind):
+            if done(x):
+                out.setdefault(x["bundle_id"], set()).add(tag)
+    return out

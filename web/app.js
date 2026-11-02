@@ -1360,7 +1360,7 @@ async function openCriteria() {
     const tr = el("tr");
     const name = el("td", "", b.title);
     name.append(el("br"), el("small", "muted", `${b.domain} · ${b.concepts.join(", ")} · ${b.doc_chars.toLocaleString()}자`));
-    tr.append(name, el("td", "", `정책 ${b.policies} · 결함 ${b.defects}`), el("td", "", `${b.sheets}회`),
+    tr.append(name, el("td", "", `정책 ${b.policies} · 결함 ${b.defects}`), el("td", "", `${b.sheets}회${b.seen ? " · 이미 봄" : ""}`),
       el("td", "", pctText(b.best_coverage)));
     const td = el("td");
     const btn = el("button", "primary", "시작");
@@ -1873,6 +1873,503 @@ function showReadResult(v) {
   show("read-result");
 }
 
+// ---------- 공통: C·D 드릴 ----------
+
+const scoreTile = (label, value, sub) => {
+  const t = el("div", "score");
+  t.append(el("span", "muted", label), el("b", "", value ?? "-"), el("small", "muted", sub || ""));
+  return t;
+};
+// 위로 세는 시계: soft초를 넘으면 색만 바꾼다 (자동 제출 없음)
+function countUp(o, timerSel, elapsed, soft) {
+  clearInterval(o.tick);
+  const t0 = Date.now() - elapsed * 1000;
+  const render = () => {
+    const s = Math.floor((Date.now() - t0) / 1000);
+    $(timerSel).textContent = fmtSec(s);
+    $(timerSel).classList.toggle("low", s > soft);
+  };
+  render();
+  o.tick = setInterval(render, 500);
+}
+function polBox(p, cls = "") {
+  const b = el("div", `pol ${cls}`);
+  b.append(el("p", "", `${p.id} ${p.title} (${p.kind_label}) — ${p.location}`));
+  if (p.doc_quote) b.append(el("blockquote", "", p.doc_quote));
+  b.append(el("p", "muted", p.statement));
+  return b;
+}
+async function bundleButton(btn, statusEl, reload) {
+  btn.disabled = true;
+  try {
+    const b = await withProgress(statusEl, "명세 문서·정책·정답 구현·결함 출제 → 실행 검증 중…", post("/api/criteria/bundles", {}));
+    await reload();
+    statusEl.textContent = `"${b.title}" — 정책 ${b.policies}개, 결함 ${b.defects}개. 시작을 눌러 푸세요.`;
+  } catch (err) {
+    statusEl.textContent = `생성 실패: ${err.message}`;
+  } finally {
+    btn.disabled = false;
+  }
+}
+const drillsText = (ds) => (ds.length ? ds.join("·") : "-");
+
+// ---------- AI 변경 검토 드릴 (docs/flow_drills_design.md 4절 C) ----------
+
+const rv = { deck: null, q: null, line: null, tick: null, sending: false };
+
+$("#btn-review").onclick = openReview;
+$("#btn-rev-setup").onclick = openReview;
+$("#btn-rev-bundle").onclick = () => bundleButton($("#btn-rev-bundle"), $("#rev-bundle-status"), openReview);
+
+async function openReview() {
+  location.hash = "review";
+  clearInterval(rv.tick);
+  show("rev-setup");
+  const d = await api("/api/review");
+  const tb = $("#rev-bundles");
+  tb.innerHTML = "";
+  for (const b of d.bundles) {
+    const tr = el("tr");
+    const name = el("td", "", b.title);
+    name.append(el("br"), el("small", "muted", `${b.domain} · ${b.concepts.join(", ")} · 함수 ${b.functions}개`));
+    tr.append(name, el("td", "", `${b.defects}개`), el("td", "", `${b.defects_seen} / ${b.defects}`), el("td", "", drillsText(b.drills)));
+    const td = el("td");
+    const btn = el("button", b.drills.length ? "" : "primary", "시작");
+    btn.onclick = async () => {
+      btn.disabled = true;
+      try { renderReview(await post("/api/review/decks", { bundle_id: b.bundle_id })); }
+      catch (err) { $("#rev-start-status").textContent = err.message; btn.disabled = false; }
+    };
+    td.append(btn);
+    tr.append(td);
+    tb.append(tr);
+  }
+  if (!d.bundles.length) tb.append(emptyRow(5, "아직 정책 묶음이 없습니다. 위에서 새로 만드세요."));
+  const sb = $("#rev-decks");
+  sb.innerHTML = "";
+  for (const r of d.reviews) {
+    const tr = el("tr");
+    tr.append(el("td", "", r.review_id), el("td", "", r.title), el("td", "", `${r.answered} / ${r.cards}장`),
+      el("td", "", `${r.all_correct}장`), el("td", "", `${r.caught} / ${r.defects}`), el("td", "", `${r.false_alarm}`));
+    const td = el("td");
+    const btn = el("button", "", r.done ? "보기" : "이어하기");
+    btn.onclick = () => openReviewDeck(r.review_id);
+    td.append(btn);
+    tr.append(td);
+    sb.append(tr);
+  }
+  if (!d.reviews.length) sb.append(emptyRow(7, "아직 없습니다."));
+}
+
+async function openReviewDeck(id) {
+  renderReview(await api(`/api/review/decks/${id}`));
+}
+
+function renderReview(v) {
+  rv.deck = v;
+  location.hash = `review=${v.review_id}`;
+  if (!v.question) return showReviewSummary(v);
+  const q = v.question;
+  rv.q = q;
+  rv.line = null;
+  $("#rv-progress").textContent = `카드 ${q.n} / ${q.total}`;
+  $("#rv-agent").textContent = q.agent_note;
+  $("#rv-ask").classList.remove("hidden");
+  $("#rv-result").innerHTML = "";
+  $("#rv-doc").textContent = v.spec_doc;
+  const code = $("#rv-code");
+  code.innerHTML = "";
+  for (const s of q.code) {
+    const wrap = el("div", "snip");
+    wrap.append(el("div", "snip-h", `${s.name} (${s.start}~${s.end}행)`));
+    const pre = el("pre");
+    for (const l of s.lines) {
+      const line = el("span", "ln pick");
+      line.dataset.n = l.n;
+      line.append(el("i", "", String(l.n)), document.createTextNode(l.text));
+      line.onclick = () => {
+        rv.line = l.n;
+        $$("#rv-code .ln").forEach((x) => x.classList.toggle("sel", Number(x.dataset.n) === l.n));
+        $("input[name=rv-verdict][value=violation]").checked = true;
+        renderPick();
+      };
+      pre.append(line);
+    }
+    wrap.append(pre);
+    code.append(wrap);
+  }
+  const pols = $("#rv-policies");
+  pols.innerHTML = "";
+  for (const p of q.policies) {
+    const b = polBox(p);
+    const lab = el("label");
+    const inp = el("input");
+    inp.type = "radio"; inp.name = "rv-policy"; inp.value = p.id;
+    inp.onchange = () => { $("input[name=rv-verdict][value=violation]").checked = true; renderPick(); };
+    lab.append(inp, " 이 요구사항을 어김");
+    b.append(lab);
+    pols.append(b);
+  }
+  $$("input[name=rv-verdict]").forEach((x) => { x.checked = false; x.onchange = renderPick; });
+  $("#rv-status").textContent = "";
+  renderPick();
+  countUp(rv, "#rv-timer", q.elapsed_sec, q.soft_sec);
+  show("rev-card");
+}
+
+function renderPick() {
+  const v = $("input[name=rv-verdict]:checked")?.value;
+  const p = $("input[name=rv-policy]:checked")?.value;
+  $("#rv-pick").textContent = v === "violation" ? `요구사항: ${p || "(고르세요)"} · 줄: ${rv.line ?? "(클릭하세요)"}` : "";
+}
+
+$("#btn-rv-submit").onclick = async () => {
+  if (rv.sending) return;
+  const verdict = $("input[name=rv-verdict]:checked")?.value;
+  const policy_id = $("input[name=rv-policy]:checked")?.value || null;
+  if (!verdict) { $("#rv-status").textContent = "위반 여부를 고르세요."; return; }
+  if (verdict === "violation" && !policy_id) { $("#rv-status").textContent = "어긴 요구사항을 고르세요."; return; }
+  rv.sending = true;
+  try {
+    const r = await post(`/api/review/decks/${rv.deck.review_id}/cards/${rv.q.n}/answer`,
+      { verdict, policy_id, line: verdict === "violation" ? rv.line : null });
+    showReviewResult(r);
+  } catch (err) {
+    $("#rv-status").textContent = `제출 실패: ${err.message}`;
+  } finally {
+    rv.sending = false;
+  }
+};
+
+function showReviewResult(r) {
+  clearInterval(rv.tick);
+  $("#rv-timer").textContent = `${r.elapsed_sec}초`;
+  $("#rv-timer").classList.remove("low");
+  $("#rv-progress").textContent = `카드 ${r.n} / ${r.total} — ${r.all_correct ? "맞음" : "틀림"}`;
+  $("#rv-agent").textContent = r.agent_note;
+  $("#rv-ask").classList.add("hidden");
+  const box = $("#rv-result");
+  box.innerHTML = "";
+  const a = r.answer;
+  const mine = a.verdict === "ok" ? "위반 없음" : `위반 — ${a.policy_id}${a.line ? `, ${a.line}행` : ", 줄 안 고름"}`;
+  const truth = r.kind === "correct" ? "위반 없음 (정책을 지킨 코드)" : `위반 — ${r.accepted.map((p) => p.id).join(" 또는 ")}, ${r.hits.join("·")}행`;
+  const marks = [["위반 여부", r.verdict_ok]];
+  if (r.kind === "defect") marks.push(["요구사항", r.policy_ok], ["줄", r.line_ok]);
+  const d = el("div", `slot ${r.all_correct ? "ok" : "bad"}`);
+  d.append(el("p", "", marks.map(([k, ok]) => `${ok ? "✓" : "✗"} ${k}`).join("  ")),
+    el("div", "ans", `내 답: ${mine}`), el("div", "ans", `정답: ${truth}`));
+  box.append(d);
+  if (r.kind === "correct") {
+    box.append(el("p", "", `이 코드는 관련 요구사항의 확인 예시 ${r.passed}개를 모두 통과합니다.`));
+    if (a.verdict === "violation" && r.mine_policy) {
+      box.append(el("p", "", "고른 요구사항을 다시 읽고, 코드의 어느 분기가 그 요구사항을 지키는지 찾아보세요."), polBox(r.mine_policy));
+    }
+    r.code.forEach((s) => box.append(codeBlock(s.name, s.lines, `${s.name} (${s.start}~${s.end}행)`)));
+  } else {
+    box.append(el("h3", "", "이 코드가 업무에서 일으키는 일"), el("p", "", r.defect_summary));
+    box.append(el("h3", "", "어긴 요구사항"), polBox(r.policy, "missed"));
+    const others = r.accepted.filter((p) => p.id !== r.policy.id);
+    if (others.length) box.append(el("p", "muted", `실행해 보니 이 요구사항의 예시도 틀립니다 (골라도 정답): ${others.map((p) => `${p.id} ${p.title}`).join(", ")}`));
+    if (r.evidence.length) {
+      box.append(el("h3", "", "실행으로 확인"));
+      const t = el("table", "list");
+      t.innerHTML = "<thead><tr><th>예시</th><th>입력</th><th>요구사항대로</th><th>이 코드</th></tr></thead>";
+      const tb = el("tbody");
+      for (const e of r.evidence) {
+        const tr = el("tr", "bad");
+        tr.append(el("td", "", e.eid), el("td", "", e.call), el("td", "", e.expected), el("td", "", e.actual));
+        tb.append(tr);
+      }
+      t.append(tb);
+      box.append(t);
+    }
+    box.append(el("h3", "", "에이전트 코드 (바뀐 줄 표시)"));
+    r.code.forEach((s) => box.append(codeBlock(s.name, s.lines, `${s.name} (${s.start}~${s.end}행)`)));
+    const det = el("details");
+    det.append(el("summary", "", "요구사항을 지킨 코드와 비교"));
+    r.ref_code.forEach((s) => det.append(codeBlock(s.name, s.lines, `정답 ${s.name}`)));
+    box.append(det);
+  }
+  const row = el("div", "row");
+  const next = el("button", "primary", r.done ? "요약 보기" : "다음 카드");
+  next.onclick = () => openReviewDeck(rv.deck.review_id);
+  row.append(next);
+  box.append(row);
+  show("rev-card");
+  next.focus();
+}
+
+function showReviewSummary(v) {
+  clearInterval(rv.tick);
+  const s = v.summary;
+  $("#rvs-title").textContent = `검토 결과 — ${v.title}`;
+  const body = $("#rvs-body");
+  body.innerHTML = "";
+  const row = el("div", "score-row");
+  row.append(scoreTile("모두 맞음", `${s.all_correct} / ${s.cards}장`, ""),
+    scoreTile("결함 발견", pctText(s.catch_rate), `${s.caught} / ${s.defects}장`),
+    scoreTile("발견한 결함 중", `정책 ${s.policy_ok} · 줄 ${s.line_ok}`, `/ ${s.caught}장`),
+    scoreTile("오경보", `${s.false_alarm}장`, `정상 코드 ${s.clean}장 중`),
+    scoreTile("평균 시간", s.avg_sec == null ? "-" : `${s.avg_sec}초`, "목표 장당 2~3분"));
+  body.append(row);
+  const t = el("table", "list");
+  t.innerHTML = "<thead><tr><th>카드</th><th>코드</th><th>종류</th><th>결과</th><th></th></tr></thead>";
+  const tb = el("tbody");
+  for (const it of v.items) {
+    const tr = el("tr", it.all_correct ? "" : "bad");
+    tr.append(el("td", "", String(it.n)), el("td", "", it.names.join(", ")),
+      el("td", "", it.kind === "correct" ? "정상" : "결함"), el("td", "", it.all_correct ? "맞음" : "틀림"));
+    const td = el("td");
+    const b = el("button", "", "다시 보기");
+    b.onclick = async () => showReviewResult(await api(`/api/review/decks/${v.review_id}/cards/${it.n}/result`));
+    td.append(b);
+    tr.append(td);
+    tb.append(tr);
+  }
+  t.append(tb);
+  body.append(t);
+  show("rev-summary");
+}
+
+// ---------- 변경 대응 드릴 (docs/flow_drills_design.md 4절 D) ----------
+
+const cg = { resp: null, q: null, tick: null, sending: false };
+
+$("#btn-change").onclick = openChange;
+$("#btn-chg-setup").onclick = openChange;
+$("#btn-chg-bundle").onclick = () => bundleButton($("#btn-chg-bundle"), $("#chg-bundle-status"), openChange);
+
+async function openChange() {
+  location.hash = "change";
+  clearInterval(cg.tick);
+  show("chg-setup");
+  const d = await api("/api/change");
+  const tb = $("#chg-bundles");
+  tb.innerHTML = "";
+  for (const b of d.bundles) {
+    const tr = el("tr");
+    const name = el("td", "", b.title);
+    name.append(el("br"), el("small", "muted", `${b.domain} · 정책 ${b.policies}개 · 함수 ${b.functions}개`));
+    tr.append(name, el("td", "", b.changes ? `${b.changes}개` : "아직 (시작 시 출제)"), el("td", "", `${b.responses}회`),
+      el("td", "", drillsText(b.drills)));
+    const td = el("td");
+    const btn = el("button", "primary", "시작");
+    btn.onclick = async () => {
+      btn.disabled = true;
+      try {
+        const p = post("/api/change/responses", { bundle_id: b.bundle_id });
+        renderChange(b.changes ? await p : await withProgress($("#chg-start-status"), "정책 변경 공지 출제 → 실행으로 영향 범위 계산 중…", p));
+      } catch (err) {
+        $("#chg-start-status").textContent = err.message;
+        btn.disabled = false;
+      }
+    };
+    td.append(btn);
+    tr.append(td);
+    tb.append(tr);
+  }
+  if (!d.bundles.length) tb.append(emptyRow(5, "아직 정책 묶음이 없습니다. 위에서 새로 만드세요."));
+  const sb = $("#chg-resps");
+  sb.innerHTML = "";
+  for (const r of d.responses) {
+    const tr = el("tr");
+    const rp = (rec, pre) => (rec == null ? "-" : `재현 ${rec}% · 정밀 ${pre ?? "-"}%`);
+    tr.append(el("td", "", r.response_id), el("td", "", r.title), el("td", "", `${r.answered} / ${r.cards}장`),
+      el("td", "", `${r.all_correct}장`), el("td", "", rp(r.policy_recall, r.policy_precision)),
+      el("td", "", rp(r.example_recall, r.example_precision)), el("td", "", rp(r.code_recall, r.code_precision)));
+    const td = el("td");
+    const btn = el("button", "", r.done ? "보기" : "이어하기");
+    btn.onclick = () => openResponse(r.response_id);
+    td.append(btn);
+    tr.append(td);
+    sb.append(tr);
+  }
+  if (!d.responses.length) sb.append(emptyRow(8, "아직 없습니다."));
+}
+
+async function openResponse(id) {
+  renderChange(await api(`/api/change/responses/${id}`));
+}
+
+function checkRow(name, value, labelNode) {
+  const lab = el("label", "pickrow");
+  const inp = el("input");
+  inp.type = "checkbox"; inp.name = name; inp.value = value;
+  lab.append(inp, labelNode);
+  return lab;
+}
+
+function renderChange(v) {
+  cg.resp = v;
+  location.hash = `change=${v.response_id}`;
+  if (!v.question) return showChangeSummary(v);
+  const q = v.question;
+  cg.q = q;
+  $("#cg-progress").textContent = `변경 ${q.n} / ${q.total}`;
+  $("#cg-notice").textContent = `[${q.title}]\n${q.notice}`;
+  $("#cg-ask").classList.remove("hidden");
+  $("#cg-result").innerHTML = "";
+  $("#cg-doc").textContent = v.spec_doc;
+  const pols = $("#cg-policies");
+  pols.innerHTML = "";
+  for (const p of q.policies) {
+    const t = el("span", "", `${p.id} ${p.title} — `);
+    t.append(el("span", "muted", p.statement));
+    pols.append(checkRow("cg-pol", p.id, t));
+  }
+  const tb = $("#cg-examples");
+  tb.innerHTML = "";
+  for (const e of q.examples) {
+    const tr = el("tr");
+    const c = el("td");
+    const inp = el("input");
+    inp.type = "checkbox"; inp.name = "cg-ex"; inp.value = e.eid;
+    c.append(inp);
+    const val = el("input");
+    val.autocomplete = "off";
+    val.dataset.eid = e.eid;
+    val.disabled = true;
+    const r = e.returns;
+    val.placeholder = r.type === "choice" ? r.options.join(" / ") : `${r.label} (${TYPE_HINT[r.type] || r.type})`;
+    inp.onchange = () => { val.disabled = !inp.checked; if (inp.checked) val.focus(); };
+    const vtd = el("td");
+    vtd.append(val);
+    tr.append(c, el("td", "", e.eid), el("td", "", e.call), el("td", "", e.expected), vtd);
+    tb.append(tr);
+  }
+  const ch = $("#cg-chunks");
+  ch.innerHTML = "";
+  for (const x of q.chunks) {
+    ch.append(checkRow("cg-chunk", x.name, el("span", "", `${x.name} (${x.kind === "func" ? "함수" : "상수·표"}, ${x.start}~${x.end}행)`)));
+  }
+  const code = $("#cg-code");
+  code.innerHTML = "";
+  code.append(codeBlock("", q.code, "지금 코드"));
+  $("#cg-status").textContent = "";
+  countUp(cg, "#cg-timer", q.elapsed_sec, q.soft_sec);
+  show("chg-card");
+  window.scrollTo(0, 0);
+}
+
+$("#btn-cg-submit").onclick = async () => {
+  if (cg.sending) return;
+  const checked = (n) => [...$$(`input[name=${n}]:checked`)].map((x) => x.value);
+  const examples = {};
+  for (const eid of checked("cg-ex")) {
+    const v = $(`#cg-examples input[data-eid="${eid}"]`).value.trim();
+    if (!v) { $("#cg-status").textContent = `${eid}의 새 기대값을 적으세요.`; return; }
+    examples[eid] = v;
+  }
+  cg.sending = true;
+  try {
+    const r = await post(`/api/change/responses/${cg.resp.response_id}/cards/${cg.q.n}/answer`,
+      { policies: checked("cg-pol"), examples, chunks: checked("cg-chunk") });
+    showChangeResult(r);
+  } catch (err) {
+    $("#cg-status").textContent = `제출 실패: ${err.message}`;
+  } finally {
+    cg.sending = false;
+  }
+};
+
+function showChangeResult(r) {
+  clearInterval(cg.tick);
+  $("#cg-timer").textContent = `${r.elapsed_sec}초`;
+  $("#cg-timer").classList.remove("low");
+  $("#cg-progress").textContent = `변경 ${r.n} / ${r.total} — ${r.result.all_correct ? "모두 맞음" : "채점 결과"}`;
+  $("#cg-notice").textContent = `[${r.title}]\n${r.notice}`;
+  $("#cg-ask").classList.add("hidden");
+  const box = $("#cg-result");
+  box.innerHTML = "";
+  const s = r.result;
+  const ax = (x) => `${x.hit} / ${x.truth}`;
+  const sub = (x) => `놓침 ${x.missed} · 불필요 ${x.extra}`;
+  const row = el("div", "score-row");
+  row.append(scoreTile("요구사항", ax(s.policies), sub(s.policies)), scoreTile("성공 기준 예시", ax(s.examples), sub(s.examples)),
+    scoreTile("새 기대값", `${s.values_ok} / ${s.examples.truth}`, "맞게 적은 값"), scoreTile("코드 위치", ax(s.code), sub(s.code)));
+  box.append(row);
+  const mark = (t, m) => (t && m ? "✓" : t ? "✗ 놓침" : "✗ 불필요");
+
+  box.append(el("h3", "", "요구사항"));
+  for (const p of r.policies) {
+    const b = polBox(p, p.truth && p.mine ? "caught" : "missed");
+    b.firstChild.textContent = `${mark(p.truth, p.mine)} ${b.firstChild.textContent}`;
+    if (p.new_statement) b.append(el("p", "mine", `바뀐 뒤: ${p.new_statement}`));
+    else if (p.ripple) b.append(el("p", "ev", "문구는 그대로지만 이 변경 때문에 예시 값이 바뀝니다 (파급)."));
+    else if (!p.truth) b.append(el("p", "ev", "이 변경으로 바뀌지 않습니다. 실행해도 이 요구사항의 예시 값은 그대로입니다."));
+    box.append(b);
+  }
+  if (!r.policies.length) box.append(el("p", "muted", "없음"));
+
+  box.append(el("h3", "", `성공 기준 예시 (바뀌지 않는 예시 ${r.unchanged_examples}개는 생략)`));
+  const t = el("table", "list");
+  t.innerHTML = "<thead><tr><th>판정</th><th>예시</th><th>입력</th><th>지금</th><th>바뀐 뒤</th><th>내 답</th></tr></thead>";
+  const tb = el("tbody");
+  for (const e of r.examples) {
+    const ok = e.truth && e.chosen && e.value_ok;
+    const tr = el("tr", ok ? "ok" : "bad");
+    const verdict = !e.truth ? "✗ 바뀌지 않음" : !e.chosen ? "✗ 놓침" : e.value_ok ? "✓" : "✗ 값 틀림";
+    tr.append(el("td", "", verdict), el("td", "", e.eid), el("td", "", e.call), el("td", "", e.old),
+      el("td", "", e.new), el("td", "", e.mine ?? "-"));
+    tb.append(tr);
+  }
+  t.append(tb);
+  box.append(t);
+
+  box.append(el("h3", "", "코드 위치"));
+  for (const c of r.code_rows) {
+    const txt = c.truth ? `${mark(true, c.mine)} ${c.name}` : c.reader ? `${c.mine ? "○" : "·"} ${c.name} — 바뀐 기준표를 읽는 곳 (고칠 곳은 아님, 골라도 감점 없음)` : `✗ 불필요 ${c.name}`;
+    box.append(el("p", "", txt));
+  }
+  box.append(el("h4", "", "바뀐 뒤 코드 (바뀐 줄 표시)"));
+  r.new_code.forEach((sn) => box.append(codeBlock(sn.name, sn.lines, `${sn.name} (${sn.start}~${sn.end}행)`)));
+  const det = el("details");
+  det.append(el("summary", "", "바뀌기 전 코드"));
+  r.old_code.forEach((sn) => det.append(codeBlock(sn.name, sn.lines, `${sn.name}`)));
+  box.append(det);
+
+  const nrow = el("div", "row");
+  const next = el("button", "primary", r.done ? "요약 보기" : "다음 변경");
+  next.onclick = () => openResponse(cg.resp.response_id);
+  nrow.append(next);
+  box.append(nrow);
+  show("chg-card");
+  window.scrollTo(0, 0);
+}
+
+function showChangeSummary(v) {
+  clearInterval(cg.tick);
+  const s = v.summary;
+  $("#cgs-title").textContent = `변경 대응 결과 — ${v.title}`;
+  const body = $("#cgs-body");
+  body.innerHTML = "";
+  const rp = (rec, pre) => `재현 ${pctText(rec)} · 정밀 ${pctText(pre)}`;
+  const row = el("div", "score-row");
+  row.append(scoreTile("모두 맞음", `${s.all_correct} / ${s.cards}장`, ""),
+    scoreTile("요구사항", rp(s.policy_recall, s.policy_precision), "평균"),
+    scoreTile("성공 기준 예시", rp(s.example_recall, s.example_precision), `새 기대값 ${s.values_ok} / ${s.values_total}`),
+    scoreTile("코드 위치", rp(s.code_recall, s.code_precision), "평균"),
+    scoreTile("평균 시간", s.avg_sec == null ? "-" : `${s.avg_sec}초`, "목표 장당 3~5분"));
+  body.append(row);
+  body.append(el("p", "muted", "재현 = 고쳐야 하는 것 중 고른 비율 (놓치면 낮음). 정밀 = 고른 것 중 정말 고쳐야 하는 비율 (안 바뀌는 것까지 고치면 낮음)."));
+  const t = el("table", "list");
+  t.innerHTML = "<thead><tr><th>변경</th><th>공지</th><th>결과</th><th></th></tr></thead>";
+  const tb = el("tbody");
+  for (const it of v.items) {
+    const tr = el("tr", it.all_correct ? "" : "bad");
+    tr.append(el("td", "", String(it.n)), el("td", "", it.title), el("td", "", it.all_correct ? "모두 맞음" : "틀림"));
+    const td = el("td");
+    const b = el("button", "", "다시 보기");
+    b.onclick = async () => showChangeResult(await api(`/api/change/responses/${v.response_id}/cards/${it.n}/result`));
+    td.append(b);
+    tr.append(td);
+    tb.append(tr);
+  }
+  t.append(tb);
+  body.append(t);
+  show("chg-summary");
+}
+
 // ---------- 상단 mockdrill 표시 → 홈 ----------
 
 // 시간이 흐르는 화면: 떠나도 서버 쪽 시간은 계속 흐르므로 확인을 받는다
@@ -1882,7 +2379,7 @@ $("#brand").onclick = async () => {
   const cur = [...$$(".view")].find((v) => !v.classList.contains("hidden"))?.id;
   if (cur === "home") return;
   if (TIMED_VIEWS.includes(cur) && !confirm("진행 중인 시간은 계속 흐릅니다. 홈으로 갈까요? (작성한 내용은 저장됩니다)")) return;
-  [rh, dc, cs, rs].forEach((o) => clearInterval(o.tick));
+  [rh, dc, cs, rs, rv, cg].forEach((o) => clearInterval(o.tick));
   // 아직 저장 대기 중인 드릴 답안은 바로 저장
   if (cur === "crit-sheet" && cs.sheet) {
     clearTimeout(cs.saveTimer);
@@ -1907,4 +2404,8 @@ else if (location.hash === "#criteria") openCriteria();
 else if (location.hash.startsWith("#sheet=")) openSheet(location.hash.slice(7)).catch(() => show("home"));
 else if (location.hash === "#reading") openReading();
 else if (location.hash.startsWith("#read=")) openRead(location.hash.slice(6)).catch(() => show("home"));
+else if (location.hash === "#review") openReview();
+else if (location.hash.startsWith("#review=")) openReviewDeck(location.hash.slice(8)).catch(() => show("home"));
+else if (location.hash === "#change") openChange();
+else if (location.hash.startsWith("#change=")) openResponse(location.hash.slice(8)).catch(() => show("home"));
 else loadSessions();
