@@ -1590,7 +1590,8 @@ function showCritResult(v) {
     tile("정책 이해 정확도", pctText(s.accuracy), `맞은 예시 ${s.correct} / ${s.valid}`),
     tile("결함 검출률", pctText(s.coverage), `잡은 결함 ${s.killed} / ${s.defects}`),
     tile("예시", `${s.rows}개`, `형식·실행 오류 ${s.invalid} · 아무 결함도 못 잡은 맞는 예시 ${s.idle}`),
-    tile("시간", mins, v.timed_out ? "시간 초과로 자동 제출" : ""));
+    tile("시간", mins, [v.timed_out ? "시간 초과로 자동 제출" : "", v.pauses ? `일시정지 ${v.pauses}회 (멈춘 시간 제외)` : ""]
+      .filter(Boolean).join(" · ")));
   body.append(row);
   body.append(el("p", "muted", "정확도: 내 기대값이 정답 구현의 실제 출력과 같은 비율. 검출률: 맞는 예시 중 하나라도 결함 버전에서 다른 값이 나오면 그 결함을 잡은 것."));
 
@@ -1656,7 +1657,7 @@ function showCritResult(v) {
 
 // ---------- 읽기·정리 드릴 (docs/flow_drills_design.md 4절 A) ----------
 
-const rs = { sheet: null, deadline: null, tick: null, sending: false, saveTimer: null };
+const rs = { sheet: null, deadline: null, tick: null, sending: false, saveTimer: null, last: null };
 
 $("#btn-reading").onclick = openReading;
 $("#btn-rr-setup").onclick = openReading;
@@ -1679,7 +1680,7 @@ async function openReading() {
     tr.append(name, el("td", "", `${b.policies}개`), el("td", "", `${b.reads}회${b.seen ? " · 이미 봄" : ""}`),
       el("td", "", pctText(b.best_recall)));
     const td = el("td");
-    const btn = el("button", b.seen ? "" : "primary", "시작");
+    const btn = el("button", b.seen ? "" : "primary", b.reads ? "다시 풀기" : "시작");
     btn.onclick = () => startRead(b.bundle_id, btn);
     td.append(btn);
     tr.append(td);
@@ -1743,12 +1744,36 @@ function renderRead(v) {
   $("#rs-text").disabled = false;
   $("#rs-count").textContent = `항목 ${countItems(v.text)}개`;
   $("#rs-status").textContent = "";
-  clearInterval(rs.tick);
-  rs.deadline = v.remaining_sec == null ? null : Date.now() + v.remaining_sec * 1000;
-  renderReadTimer();
-  rs.tick = setInterval(renderReadTimer, 500);
+  $("#btn-rs-pause").disabled = false;
+  syncReadTimer(v);
   show("read-sheet");
 }
+
+// 서버가 준 남은 시간·일시정지 상태로 시계를 맞춘다. 멈춘 동안에는 시계만 서고 문서·답안은 그대로 쓸 수 있다.
+function syncReadTimer(v) {
+  rs.sheet = v;
+  clearInterval(rs.tick);
+  rs.deadline = v.remaining_sec == null ? null : Date.now() + v.remaining_sec * 1000;
+  $("#btn-rs-pause").textContent = v.paused ? "재개" : "일시정지";
+  renderReadTimer();
+  if (!v.paused) rs.tick = setInterval(renderReadTimer, 500);
+}
+
+async function pauseRead(paused) {
+  return post(`/api/reading/sheets/${rs.sheet.read_id}/pause`, { paused });
+}
+
+$("#btn-rs-pause").onclick = async () => {
+  const btn = $("#btn-rs-pause");
+  btn.disabled = true;
+  try {
+    syncReadTimer(await pauseRead(!rs.sheet.paused));
+  } catch (err) {
+    $("#rs-status").textContent = err.message;
+  } finally {
+    btn.disabled = false;
+  }
+};
 
 $("#rs-text").oninput = () => {
   $("#rs-count").textContent = `항목 ${countItems($("#rs-text").value)}개`;
@@ -1766,19 +1791,34 @@ async function saveReadText() {
 }
 
 function renderReadTimer() {
-  if (rs.deadline === null) { $("#rs-timer").textContent = "제한 없음"; return; }
-  const left = Math.max(0, Math.ceil((rs.deadline - Date.now()) / 1000));
-  $("#rs-timer").textContent = `${Math.floor(left / 60)}:${pad(left % 60)}`;
+  const paused = rs.sheet?.paused;
+  if (rs.deadline === null) { $("#rs-timer").textContent = paused ? "제한 없음 (일시정지)" : "제한 없음"; return; }
+  const left = paused ? Math.max(0, rs.sheet.remaining_sec)
+    : Math.max(0, Math.ceil((rs.deadline - Date.now()) / 1000));
+  $("#rs-timer").textContent = `${Math.floor(left / 60)}:${pad(left % 60)}` + (paused ? " (일시정지)" : "");
   $("#rs-timer").classList.toggle("low", left <= 120 && left > 0);
   $("#rs-timer").classList.toggle("over", left === 0);
   if (left === 0) submitRead(true);
 }
 
 $("#btn-rs-submit").onclick = () => submitRead(false);
+// 같은 문서·같은 제한 시간으로 새 답안을 시작한다 (지난 답안은 목록에 남는다)
+$("#btn-rr-retry").onclick = async () => {
+  const btn = $("#btn-rr-retry");
+  btn.disabled = true;
+  try {
+    renderRead(await post("/api/reading/sheets", { bundle_id: rs.last.bundle_id, seconds: rs.last.seconds }));
+  } catch (err) {
+    alert(`다시 풀기 실패: ${err.message}`);
+  } finally {
+    btn.disabled = false;
+  }
+};
 $("#btn-rs-leave").onclick = async () => {
   clearTimeout(rs.saveTimer);
   clearInterval(rs.tick);
   await saveReadText().catch(() => {});
+  await pauseRead(true).catch(() => {});   // 나가 있는 동안 시간이 흐르지 않게
   openReading();
 };
 
@@ -1790,6 +1830,7 @@ async function submitRead(timedOut) {
   clearInterval(rs.tick);
   clearTimeout(rs.saveTimer);
   $("#rs-text").disabled = true;
+  $("#btn-rs-pause").disabled = true;
   try {
     const v = await withProgress($("#rs-status"), "정책 목록과 대조해 채점하는 중…",
       post(`/api/reading/sheets/${rs.sheet.read_id}/submit`, { text, timed_out: timedOut }));
@@ -1804,6 +1845,7 @@ async function submitRead(timedOut) {
 }
 
 function showReadResult(v) {
+  rs.last = v;
   location.hash = `read=${v.read_id}`;
   clearInterval(rs.tick);
   const r = v.result;
@@ -1822,7 +1864,8 @@ function showReadResult(v) {
     tile("정책 포착률", pctText(s.recall), `반영 ${s.covered} · 부분 ${s.partial} / ${s.policies}`),
     tile("잘못 해석", `${s.misread}개`, `누락 ${s.missed}개`),
     tile("근거 없음·어긋남", `${s.unsupported + s.contradicts}개`, `내 항목 ${s.items}개 중 · 채점 외 ${s.extra}개`),
-    tile("시간", mins, v.timed_out ? "시간 초과로 자동 제출" : ""));
+    tile("시간", mins, [v.timed_out ? "시간 초과로 자동 제출" : "", v.pauses ? `일시정지 ${v.pauses}회 (멈춘 시간 제외)` : ""]
+      .filter(Boolean).join(" · ")));
   body.append(row);
   body.append(el("p", "muted", "포착률 = (반영 + 부분 반영 × 0.5) / 정책 수. 정책 목록에 없지만 문서에 근거가 있는 항목은 감점하지 않습니다."));
   body.append(el("p", "", "종류별 반영: " + s.by_kind.map((k) => `${k.label} ${k.covered}/${k.total}`).join(" · ")));

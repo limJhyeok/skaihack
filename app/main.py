@@ -520,6 +520,16 @@ def save_read_text(read_id: str, req: ReadText):
     return _reading_call(lambda: reading.save_text(read_id, req.text))
 
 
+class ReadPause(BaseModel):
+    paused: bool
+
+
+@app.post("/api/reading/sheets/{read_id}/pause")
+def pause_read(read_id: str, req: ReadPause):
+    _load_read(read_id)
+    return _reading_call(lambda: reading.set_paused(read_id, req.paused))
+
+
 @app.post("/api/reading/sheets/{read_id}/submit")
 def submit_read(read_id: str, req: ReadText):
     _load_read(read_id)
@@ -792,4 +802,13 @@ def _summary(session: Session, problem: ProblemPublic) -> dict:
     }
 
 
-app.mount("/", StaticFiles(directory=APP_ROOT / "web", html=True), name="web")
+class _NoCacheStatic(StaticFiles):
+    """화면 파일은 매번 서버에 확인시킨다. 헤더가 없으면 Chrome이 수정 전 app.js를 재검증 없이 재사용해
+    새 버튼은 보이는데 눌러도 반응이 없는 일이 생긴다. 바뀌지 않았으면 ETag로 304만 오간다."""
+    async def get_response(self, path, scope):
+        resp = await super().get_response(path, scope)
+        resp.headers["Cache-Control"] = "no-cache"
+        return resp
+
+
+app.mount("/", _NoCacheStatic(directory=APP_ROOT / "web", html=True), name="web")

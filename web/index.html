@@ -337,7 +337,7 @@ if (localStorage.getItem("mockdrill-theme") === "dark") document.documentElement
   </section>
 
   <section id="read-sheet" class="view full hidden">
-    <div class="rh-head"><h1 id="rs-title"></h1><span id="rs-timer" class="timer"></span></div>
+    <div class="rh-head"><h1 id="rs-title"></h1><span class="row"><span id="rs-timer" class="timer"></span><button id="btn-rs-pause" class="ghost">일시정지</button></span></div>
     <div class="crit-layout">
       <div id="rs-doc" class="readme crit-doc"></div>
       <div>
@@ -357,6 +357,7 @@ if (localStorage.getItem("mockdrill-theme") === "dark") document.documentElement
     <div id="rr-body"></div>
     <div class="row">
       <button class="ghost" data-go="home">홈으로</button>
+      <button id="btn-rr-retry" class="ghost">같은 문서 다시 풀기</button>
       <button id="btn-rr-setup" class="primary">드릴 화면으로</button>
     </div>
   </section>

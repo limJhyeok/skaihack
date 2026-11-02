@@ -50,11 +50,16 @@ def _check_text(text: str) -> str:
     return text
 
 
+def _elapsed(sheet: dict) -> int:
+    """시작부터 지금(일시정지 중이면 멈춘 시각)까지에서 멈춰 있던 시간을 뺀 초."""
+    end = datetime.fromisoformat(sheet["paused_at"]) if sheet.get("paused_at") else datetime.now().astimezone()
+    return int((end - datetime.fromisoformat(sheet["started_at"])).total_seconds()) - sheet.get("paused_sec", 0)
+
+
 def _left(sheet: dict) -> int | None:
     if not sheet["seconds"]:
         return None
-    el = (datetime.now().astimezone() - datetime.fromisoformat(sheet["started_at"])).total_seconds()
-    return int(sheet["seconds"] - el)
+    return sheet["seconds"] - _elapsed(sheet)
 
 
 def create(bundle_id: str, seconds: int | None = DEFAULT_SECONDS) -> dict:
@@ -62,7 +67,7 @@ def create(bundle_id: str, seconds: int | None = DEFAULT_SECONDS) -> dict:
     rid = cards._new_id("r")
     sheet = {"read_id": rid, "bundle_id": bundle_id, "created_at": sessions.now_iso(), "started_at": sessions.now_iso(),
              "seconds": seconds or 0, "status": "in_progress", "text": "", "result": None, "finished_at": None,
-             "timed_out": False}
+             "timed_out": False, "paused_at": None, "paused_sec": 0, "pauses": 0}
     cards._write("reads", rid, sheet)
     return sheet
 
@@ -80,6 +85,24 @@ def save_text(read_id: str, text: str) -> dict:
     return {"saved": len(parse_items(text))}
 
 
+def set_paused(read_id: str, paused: bool) -> dict:
+    """일시정지·재개. 이미 그 상태면 그대로 둔다 (나가기에서 자동 정지를 여러 번 불러도 안전)."""
+    sheet = load(read_id)
+    if sheet["status"] != "in_progress":
+        raise ReadingError("이미 제출한 답안입니다.")
+    if paused and not sheet.get("paused_at"):
+        if (left := _left(sheet)) is not None and left <= 0:
+            raise ReadingError("시간이 끝났습니다.")
+        sheet["paused_at"] = sessions.now_iso()
+        sheet["pauses"] = sheet.get("pauses", 0) + 1
+    elif not paused and sheet.get("paused_at"):
+        stopped = (datetime.now().astimezone() - datetime.fromisoformat(sheet["paused_at"])).total_seconds()
+        sheet["paused_sec"] = sheet.get("paused_sec", 0) + int(stopped)
+        sheet["paused_at"] = None
+    cards._write("reads", read_id, sheet)
+    return view(sheet)
+
+
 def submit(read_id: str, text: str, timed_out: bool = False) -> dict:
     """LLM 채점이 실패하면 답안만 저장된 채 진행 중으로 남아 다시 제출할 수 있다."""
     sheet = load(read_id)
@@ -90,7 +113,7 @@ def submit(read_id: str, text: str, timed_out: bool = False) -> dict:
     sheet["timed_out"] = sheet["timed_out"] or timed_out or (left is not None and left <= 0)
     if not sheet.get("finished_at"):
         sheet["finished_at"] = sessions.now_iso()
-        sheet["elapsed_sec"] = int((datetime.now().astimezone() - datetime.fromisoformat(sheet["started_at"])).total_seconds())
+        sheet["elapsed_sec"] = _elapsed(sheet)
     cards._write("reads", read_id, sheet)
     bundle = policy.load(sheet["bundle_id"])
     items = parse_items(text)
@@ -178,7 +201,8 @@ def view(sheet: dict) -> dict:
             "status": sheet["status"], "seconds": sheet["seconds"],
             "remaining_sec": None if left is None else max(0, left),
             "spec_doc": bundle["spec_doc"], "text": sheet["text"], "timed_out": sheet["timed_out"],
-            "elapsed_sec": sheet.get("elapsed_sec"), "result": sheet["result"]}
+            "elapsed_sec": sheet.get("elapsed_sec"), "result": sheet["result"],
+            "paused": bool(sheet.get("paused_at")) and sheet["status"] == "in_progress", "pauses": sheet.get("pauses", 0)}
 
 
 def overview() -> dict:

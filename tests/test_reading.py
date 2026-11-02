@@ -150,3 +150,44 @@ def test_limits():
         reading._check_text("- a\n" * (reading.MAX_ITEMS + 1))
     with pytest.raises(reading.ReadingError):
         reading._check_text("a" * (reading.MAX_CHARS + 1))
+
+
+def test_pause_excludes_stopped_time(monkeypatch):
+    """멈춘 동안은 남은 시간·소요 시간에서 빠지고, 정지·재개를 겹쳐 불러도 한 번으로 센다."""
+    b = _bundle(monkeypatch)
+    rid = reading.create(b["bundle_id"], 600)["read_id"]
+    sheet = reading.load(rid)
+    sheet["started_at"] = "2026-01-01T09:00:00+09:00"
+    reading.cards._write("reads", rid, sheet)
+    times = iter(["2026-01-01T09:02:00+09:00", "2026-01-01T09:30:00+09:00"])
+
+    class FakeDT(reading.datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return reading.datetime.fromisoformat(current)
+    monkeypatch.setattr(reading, "datetime", FakeDT)
+    monkeypatch.setattr(reading.sessions, "now_iso", lambda: current)
+
+    current = next(times)                       # 2분 풀고 정지
+    v = client.post(f"/api/reading/sheets/{rid}/pause", json={"paused": True}).json()
+    assert v["paused"] and v["remaining_sec"] == 480 and v["pauses"] == 1
+    assert client.post(f"/api/reading/sheets/{rid}/pause", json={"paused": True}).json()["pauses"] == 1
+    current = next(times)                       # 28분 멈춰 있다가 재개
+    assert client.get(f"/api/reading/sheets/{rid}").json()["remaining_sec"] == 480
+    v = client.post(f"/api/reading/sheets/{rid}/pause", json={"paused": False}).json()
+    assert not v["paused"] and v["remaining_sec"] == 480
+    current = "2026-01-01T09:33:00+09:00"       # 3분 더 풀고 제출 → 소요 5분, 시간 초과 아님
+    monkeypatch.setattr(llm, "parse", lambda **kw: _judged())
+    monkeypatch.setattr(main, "settings", dataclasses.replace(settings, model_strong="test-model"))
+    done = client.post(f"/api/reading/sheets/{rid}/submit", json={"text": TEXT}).json()
+    assert done["elapsed_sec"] == 300 and not done["timed_out"] and done["pauses"] == 1 and not done["paused"]
+    assert client.post(f"/api/reading/sheets/{rid}/pause", json={"paused": True}).status_code == 409
+
+
+def test_cannot_pause_after_time_is_up(monkeypatch):
+    b = _bundle(monkeypatch)
+    rid = reading.create(b["bundle_id"], 60)["read_id"]
+    sheet = reading.load(rid)
+    sheet["started_at"] = "2020-01-01T09:00:00+09:00"
+    reading.cards._write("reads", rid, sheet)
+    assert client.post(f"/api/reading/sheets/{rid}/pause", json={"paused": True}).status_code == 409
