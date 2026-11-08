@@ -65,18 +65,22 @@ class Sealed(BaseModel):
 
 
 class GeneratedProblem(BaseModel):
-    """출제 LLM 출력. 공개분과 봉인분으로 나눠 저장한다."""
+    """출제 LLM 출력. 공개분과 봉인분으로 나눠 저장한다.
+
+    필드 순서 = 생성 순서. 설계(숨은 사실·채점 기준·개념)를 먼저 확정하고 본문(README·데이터)을
+    그에 맞춰 쓰게 하려고 봉인분을 앞에 둔다. 순서를 바꾸면 출제 품질이 달라진다.
+    """
     title: str
-    readme_markdown: str
-    data_files: list[DataFile]
-    persona_public: PersonaPublic
-    persona_private: PersonaPrivate
     facts: list[Fact]
+    persona_private: PersonaPrivate
     priority_confusion: list[str]
     good_solution_criteria: list[str]
     overengineering_traps: list[str]
-    data_file_notes: str
     concepts: list[ConceptUse]
+    data_file_notes: str
+    readme_markdown: str
+    data_files: list[DataFile]
+    persona_public: PersonaPublic
 
 
 class ProblemPublic(BaseModel):

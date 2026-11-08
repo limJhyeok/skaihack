@@ -549,6 +549,7 @@ def generate(choice: dict) -> GeneratedProblem:
         errors = validate(problem, choice)
         if not errors:
             return problem
+        llm.log.warning("출제 검증 실패 → 재생성: %s", "; ".join(errors))
         # 실패 사유는 숨은 사실 내용 없이 항목명만 넘긴다.
         feedback = "\n[이전 출제가 검증에 실패한 이유 — 이번에는 반드시 고칠 것]\n" + "\n".join(f"- {e}" for e in errors) + "\n"
     raise GenerationError("출제 검증 실패 (재생성 2회 후): " + "; ".join(errors))
