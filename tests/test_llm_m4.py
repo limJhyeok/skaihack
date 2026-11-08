@@ -20,9 +20,9 @@ def test_generation_meets_acceptance(generated):
     assert len(qs) == 5
     types = [q["type"] for q in qs]
     assert "design_reason" in types and "failure_response" in types
-    names = codectx.build(SAMPLE).identifiers()
+    names = rehearsal._code_names(codectx.build(SAMPLE))
     for q in qs:
-        assert any(n in q["question"] for n in names), q["question"]
+        assert not rehearsal.leaked_identifiers(q["question"], names), q["question"]
         for step in ("weak_point", "impact", "plan"):
             assert q["model_answer"][step]["text"].strip()
             assert any(":" in e and e.split(":")[-1].strip().split("-")[0].isdigit() for e in q["model_answer"][step]["evidence"])

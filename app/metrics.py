@@ -160,7 +160,8 @@ def discovery(sealed: Sealed, chat: list[dict]) -> dict[str, dict]:
 
 
 def _rate(sealed: Sealed, disc: dict, pred) -> dict:
-    ids = [f.id for f in sealed.facts if pred(f)]
+    """대화 발견률. README에 묻힌 사실(buried)은 대화 발견 대상이 아니라 빼고 센다."""
+    ids = [f.id for f in sealed.facts if f.type != "buried" and pred(f)]
     found = sum(disc[i]["discovered"] for i in ids)
     return {"found": found, "total": len(ids), "rate": round(found / len(ids), 2) if ids else None}
 
@@ -233,7 +234,8 @@ def compute(*, readme: str, sealed: Sealed, chat: list[dict], process: dict, wor
                 "constraint": _rate(sealed, disc, lambda f: f.type == "constraint"),
                 "conflict": _rate(sealed, disc, lambda f: f.type == "conflict"),
             },
-            "partial_only": sum(1 for v in disc.values() if v["partial"] and not v["discovered"]),
+            "partial_only": sum(1 for f in sealed.facts if f.type != "buried"
+                                and disc[f.id]["partial"] and not disc[f.id]["discovered"]),
             "questions_before_first_impl_commit": sum(1 for r in users if first_impl_ts is None or _ts(r["ts"]) < first_impl_ts),
             "scope_proposals": proposals,
             "written_agreement": {"exists": agree is not None, "elapsed_sec": agree["elapsed_sec"] if agree else None},

@@ -8,6 +8,9 @@ from cryptography.fernet import Fernet, InvalidToken
 from app import config, generator, prompts, seal, workspace
 from app.schemas import DataFile, Fact, GeneratedProblem, PersonaPrivate, PersonaPublic, ProblemPublic
 
+POLICY_FILLER = "".join(f"{i}. 수업 예약은 시작 3시간 전까지 변경할 수 있으며 강사 배정표는 매주 월요일에 갱신됩니다. 단, 공휴일 주간은 화요일에 갱신합니다.\n"
+                        for i in range(1, 81))
+
 README_OK = """# 테스트 과제
 
 ## 상황
@@ -22,9 +25,23 @@ README_OK = """# 테스트 과제
 ## 과제
 상담 답변 초안을 돕는 웹서비스를 만드세요. 구현 방식은 응시자 판단에 맡깁니다.
 
+## 업무 정책
+""" + POLICY_FILLER + """
+야간 수업이 자정을 넘기면 출석은 수업을 시작한 날짜로 기록합니다.
+
+## 데이터 명세
+회원 번호, 이름, 등록 회차, 잔여 회차.
+
+## 예외 처리
+- 강사가 결근하면 같은 시간대 대체 강사를 먼저 찾습니다.
+
+## 제약 사항
+- 회원 연락처는 상담 화면에 표시하지 않습니다.
+
 ## 실행 환경
 OpenAI API는 OPENAI_API_KEY, OPENAI_BASE_URL 환경변수로 제공됩니다. 코드에 쓰거나 커밋하지 마세요.
 """
+BURIED_QUOTE = "야간 수업이 자정을 넘기면 출석은 수업을 시작한 날짜로 기록합니다."
 
 
 def fact(i, statement, importance="critical", **kw):
@@ -33,7 +50,7 @@ def fact(i, statement, importance="critical", **kw):
     return Fact(**{**base, **kw})
 
 
-def problem(readme=README_OK, facts=None, data_files=()):
+def problem(readme=README_OK, facts=None, data_files=(), concepts=()):
     return GeneratedProblem(
         title="t", readme_markdown=readme, data_files=list(data_files),
         persona_public=PersonaPublic(name="김하늘", role="실장", intro="안녕하세요"),
@@ -41,6 +58,7 @@ def problem(readme=README_OK, facts=None, data_files=()):
         facts=facts or [fact(1, "환불 문의에는 반드시 잔여 회차 기준 금액을 먼저 안내한다."),
                         fact(2, "임산부 회원에게는 그룹 수업을 권하지 않는다.")],
         priority_confusion=[], good_solution_criteria=[], overengineering_traps=[], data_file_notes="",
+        concepts=list(concepts),
     )
 
 
@@ -81,7 +99,9 @@ def test_generate_prompt_has_no_unfilled_vars():
     text = prompts.load("generate_problem", domain="d", archetype="a", archetype_description="ad",
                         difficulty="easy", fact_count=6, conflict_count=0, constraint_count=1,
                         data_file_count=0, trap_count=2, example_readme="ex", retry_feedback="",
-                        duration_text="3시간")
+                        duration_text="3시간", ai_fit="af", tech_requirement="tr", themes="th",
+                        readme_min=6000, readme_max=8000, buried_count=2, counterintuitive_count=1,
+                        design_constraint_count=1, concepts="(없음)", trap_concepts="캐싱")
     assert "{{" not in text
     assert "3시간" in text and "4시간" not in text
 
@@ -131,6 +151,44 @@ def test_pick_avoids_used_domains_and_respects_ranges():
     c = generator.pick(None, None, "hard", seed=1, used_domains=used)
     assert c["domain"] == generator.DOMAINS[-1]
     assert 13 <= c["facts"] <= 16 and c["constraint"] == 3
+
+
+def test_pick_avoids_recent_archetypes_and_sets_ai_fit():
+    recent = [a for a in generator.ARCHETYPES if a != "settlement_billing"][:3]
+    for seed in range(20):
+        c = generator.pick(None, None, "standard", seed=seed, used_domains=set(), recent_archetypes=recent)
+        assert c["archetype"] not in recent
+        assert c["ai_fit"] in generator.ARCHETYPES[c["archetype"]]["ai_fit"]
+        assert c["tech_requirement"] in generator.TECH_REQUIREMENTS
+        assert 1 <= len(c["themes"]) <= 4
+    c = generator.pick(None, "settlement_billing", "easy", seed=1, used_domains=set())
+    assert c["ai_fit"] == "unfit"
+
+
+def test_pick_skips_data_file_requirement_without_data_files():
+    for seed in range(50):
+        c = generator.pick(None, None, "easy", seed=seed, used_domains=set())
+        if c["data_files"] == 0:
+            assert not (c["tech_requirement"] or "").startswith("제공된 데이터")
+
+
+def test_generate_prompt_includes_choice(monkeypatch):
+    seen = {}
+
+    def fake_parse(**kw):
+        seen["system"] = kw["system"]
+        return problem(facts=[fact(1, "환불 문의에는 반드시 잔여 회차 기준 금액을 먼저 안내한다."),
+                              fact(2, "임산부 회원에게는 그룹 수업을 권하지 않는다."),
+                              fact(3, "야간 출석일", type="buried", readme_quote=BURIED_QUOTE)])
+    monkeypatch.setattr(generator.llm, "parse", fake_parse)
+    c = generator.pick(None, "route_scheduling", "standard", seed=3, used_domains=set())
+    c["ai_fit"] = "unfit"
+    c["concepts"] = {"core": [], "light": [], "qa_only": []}
+    c["buried"] = 1
+    generator.generate(c)
+    assert "LLM을 쓰면 오히려 해가 되는" in seen["system"]
+    assert "공유 실험 장비 예약" in seen["system"]  # 업무 시스템 예시 README
+    assert c["themes"][0] in seen["system"]
 
 
 # ---------- 작업공간 ----------

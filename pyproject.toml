@@ -22,3 +22,4 @@ dev = [
 markers = ["llm: 실제 OpenAI API를 호출하는 테스트 (pytest -m llm)"]
 addopts = "-m 'not llm'"
 pythonpath = ["."]
+testpaths = ["tests"]

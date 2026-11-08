@@ -8,10 +8,10 @@ from pydantic import BaseModel
 import json
 from pathlib import Path
 
-from . import collector, dashboard, evaluate, generator, helper, persona, rehearsal, reveal, runner, sessions, submit, timer, workspace
+from . import cards, change, collector, criteria, dashboard, evaluate, fresh, generator, helper, persona, policy, reading, rehearsal, reveal, review, runner, sessions, submit, timer, workspace
 from .config import APP_ROOT, settings
 from .llm import LLMError
-from .schemas import Difficulty, ProblemPublic, Sealed, Session
+from .schemas import Difficulty, GeneratedProblem, ProblemPublic, Sealed, Session
 
 app = FastAPI(title="mockdrill")
 
@@ -27,7 +27,7 @@ class NewProblemRequest(BaseModel):
 def options():
     return {
         "domains": generator.DOMAINS,
-        "archetypes": [{"id": k, "description": v} for k, v in generator.ARCHETYPES.items()],
+        "archetypes": [{"id": k, "description": v["description"]} for k, v in generator.ARCHETYPES.items()],
         "difficulties": list(generator.DIFFICULTY),
     }
 
@@ -37,7 +37,8 @@ def new_problem(req: NewProblemRequest):
     if not settings.model_strong:
         raise HTTPException(500, "MOCK_MODEL_STRONG 환경변수가 설정되지 않았습니다.")
     try:
-        choice = generator.pick(req.domain, req.archetype, req.difficulty, req.seed, sessions.used_domains())
+        choice = generator.pick(req.domain, req.archetype, req.difficulty, req.seed, sessions.used_domains(),
+                                sessions.recent_archetypes(), sessions.recent_core_concepts())
         gen = generator.generate(choice)
     except ValueError as e:
         raise HTTPException(400, str(e))
@@ -50,7 +51,8 @@ def new_problem(req: NewProblemRequest):
         difficulty=choice["difficulty"], readme_markdown=gen.readme_markdown,
         data_files=gen.data_files, persona_public=gen.persona_public,
     )
-    sealed = Sealed(**gen.model_dump(include=set(Sealed.model_fields)))
+    sealed = Sealed(**gen.model_dump(include=set(GeneratedProblem.model_fields) & set(Sealed.model_fields)),
+                    ai_fit=choice["ai_fit"], tech_requirement=choice["tech_requirement"], themes=choice["themes"])
     ws = workspace.create(session_id, problem)
     session = Session(session_id=session_id, problem_id=problem_id, workspace_path=str(ws),
                       duration_min=settings.duration_min)
@@ -288,6 +290,395 @@ def _rehearsal_call(fn):
         raise HTTPException(502, str(e))
 
 
+# ---------- 동작 추적 카드 드릴 (docs/drill_design.md) ----------
+
+class DeckCreate(BaseModel):
+    session_id: str | None = None
+    repo_id: str | None = None   # 새 문제 저장소
+    count: int = cards.DEFAULT_CARDS
+
+
+class FreshCreate(BaseModel):
+    count: int = cards.DEFAULT_CARDS
+    seed: int | None = None
+
+
+class RunCreate(BaseModel):
+    mode: Literal["closed", "open"] = "closed"
+    count: int = 10
+    session_id: str | None = None  # 재료 키: 세션 ID 또는 새 문제 저장소 ID
+
+
+class CardAnswer(BaseModel):
+    answers: dict[str, str]
+    timed_out: bool = False
+
+
+@app.get("/api/drills/sources")
+def drill_sources():
+    return {"sources": cards.sources(), "decks": cards.deck_list(), "runs": cards.list_runs()}
+
+
+@app.post("/api/drills/decks")
+def create_deck(req: DeckCreate):
+    if not 3 <= req.count <= 12:
+        raise HTTPException(400, "카드 수는 3~12입니다.")
+    if req.repo_id:
+        try:
+            fresh.load(req.repo_id)
+        except (FileNotFoundError, ValueError):
+            raise HTTPException(404, "저장소를 찾을 수 없습니다.")
+        deck = _card_call(lambda: fresh.build_deck(req.repo_id, req.count))
+    elif req.session_id:
+        _load(req.session_id)
+        deck = _card_call(lambda: cards.generate_deck(req.session_id, req.count))
+    else:
+        raise HTTPException(400, "session_id 또는 repo_id가 필요합니다.")
+    return {k: deck[k] for k in ("deck_id", "generation")}
+
+
+@app.post("/api/drills/fresh")
+def create_fresh(req: FreshCreate):
+    if not 3 <= req.count <= 12:
+        raise HTTPException(400, "카드 수는 3~12입니다.")
+    try:
+        return _card_call(lambda: fresh.create(req.count, req.seed))
+    except fresh.FreshError as e:
+        raise HTTPException(502, str(e))
+
+
+@app.post("/api/drills/runs")
+def create_run(req: RunCreate):
+    if not 1 <= req.count <= 30:
+        raise HTTPException(400, "카드 수는 1~30입니다.")
+    return _card_call(lambda: cards.run_view(cards.create_run(req.mode, req.count, req.session_id)))
+
+
+@app.get("/api/drills/runs/{run_id}")
+def get_run(run_id: str):
+    return cards.run_view(_load_run(run_id))
+
+
+@app.post("/api/drills/runs/{run_id}/cards/{n}/start")
+def start_card(run_id: str, n: int):
+    _load_run(run_id)
+    return _card_call(lambda: cards.start_item(run_id, n))
+
+
+@app.post("/api/drills/runs/{run_id}/cards/{n}/answer")
+def answer_card(run_id: str, n: int, req: CardAnswer):
+    _load_run(run_id)
+    return _card_call(lambda: cards.answer(run_id, n, req.answers, req.timed_out))
+
+
+@app.get("/api/drills/runs/{run_id}/cards/{n}/result")
+def card_result(run_id: str, n: int):
+    run = _load_run(run_id)
+    return _card_call(lambda: cards.result_view(run, cards._item(run, n)))
+
+
+@app.post("/api/drills/runs/{run_id}/cards/{n}/flag")
+def flag_card(run_id: str, n: int):
+    _load_run(run_id)
+    return _card_call(lambda: cards.flag(run_id, n))
+
+
+def _load_run(run_id: str) -> dict:
+    try:
+        return cards.load_run(run_id)
+    except (FileNotFoundError, ValueError):
+        raise HTTPException(404, "드릴을 찾을 수 없습니다.")
+
+
+def _card_call(fn):
+    try:
+        return fn()
+    except cards.CardError as e:
+        raise HTTPException(409, str(e))
+    except LLMError as e:
+        raise HTTPException(502, str(e))
+
+
+# ---------- 정책 묶음 + B. 성공 기준 드릴 (docs/flow_drills_design.md 3·4절) ----------
+
+class BundleCreate(BaseModel):
+    seed: int | None = None
+
+
+class SheetCreate(BaseModel):
+    bundle_id: str
+    seconds: int = criteria.DEFAULT_SECONDS   # 0이면 시간 제한 없음
+
+
+class SheetRow(BaseModel):
+    func: str
+    args: dict[str, str]
+    expected: str
+    note: str = ""
+
+
+class SheetRows(BaseModel):
+    rows: list[SheetRow]
+    timed_out: bool = False
+
+
+@app.get("/api/criteria")
+def criteria_overview():
+    return criteria.overview()
+
+
+@app.post("/api/criteria/bundles")
+def create_bundle(req: BundleCreate):
+    if not settings.model_strong:
+        raise HTTPException(500, "MOCK_MODEL_STRONG 환경변수가 설정되지 않았습니다.")
+    try:
+        return policy.summary(policy.generate(req.seed))
+    except policy.PolicyError as e:
+        raise HTTPException(502, str(e))
+    except LLMError as e:
+        raise HTTPException(502, str(e))
+
+
+@app.post("/api/criteria/sheets")
+def create_sheet(req: SheetCreate):
+    if not 0 <= req.seconds <= 7200:
+        raise HTTPException(400, "시간은 0~7200초입니다.")
+    try:
+        sheet = criteria.create(req.bundle_id, req.seconds)
+    except (FileNotFoundError, ValueError):
+        raise HTTPException(404, "정책 묶음을 찾을 수 없습니다.")
+    return criteria.view(sheet)
+
+
+@app.get("/api/criteria/sheets/{sheet_id}")
+def get_sheet(sheet_id: str):
+    return criteria.view(_load_sheet(sheet_id))
+
+
+@app.put("/api/criteria/sheets/{sheet_id}/rows")
+def save_sheet_rows(sheet_id: str, req: SheetRows):
+    _load_sheet(sheet_id)
+    return _criteria_call(lambda: criteria.save_rows(sheet_id, [r.model_dump() for r in req.rows]))
+
+
+@app.post("/api/criteria/sheets/{sheet_id}/submit")
+def submit_sheet(sheet_id: str, req: SheetRows):
+    _load_sheet(sheet_id)
+    return _criteria_call(lambda: criteria.submit(sheet_id, [r.model_dump() for r in req.rows], req.timed_out))
+
+
+def _load_sheet(sheet_id: str) -> dict:
+    try:
+        return criteria.load(sheet_id)
+    except (FileNotFoundError, ValueError):
+        raise HTTPException(404, "답안을 찾을 수 없습니다.")
+
+
+def _criteria_call(fn):
+    try:
+        return fn()
+    except criteria.CriteriaError as e:
+        raise HTTPException(409, str(e))
+
+
+# ---------- A. 읽기·정리 드릴 (docs/flow_drills_design.md 4절) ----------
+
+class ReadCreate(BaseModel):
+    bundle_id: str
+    seconds: int = reading.DEFAULT_SECONDS   # 0이면 시간 제한 없음
+
+
+class ReadText(BaseModel):
+    text: str
+    timed_out: bool = False
+
+
+@app.get("/api/reading")
+def reading_overview():
+    return reading.overview()
+
+
+@app.post("/api/reading/sheets")
+def create_read(req: ReadCreate):
+    if not 0 <= req.seconds <= 7200:
+        raise HTTPException(400, "시간은 0~7200초입니다.")
+    try:
+        sheet = reading.create(req.bundle_id, req.seconds)
+    except (FileNotFoundError, ValueError):
+        raise HTTPException(404, "정책 묶음을 찾을 수 없습니다.")
+    return reading.view(sheet)
+
+
+@app.get("/api/reading/sheets/{read_id}")
+def get_read(read_id: str):
+    return reading.view(_load_read(read_id))
+
+
+@app.put("/api/reading/sheets/{read_id}/text")
+def save_read_text(read_id: str, req: ReadText):
+    _load_read(read_id)
+    return _reading_call(lambda: reading.save_text(read_id, req.text))
+
+
+class ReadPause(BaseModel):
+    paused: bool
+
+
+@app.post("/api/reading/sheets/{read_id}/pause")
+def pause_read(read_id: str, req: ReadPause):
+    _load_read(read_id)
+    return _reading_call(lambda: reading.set_paused(read_id, req.paused))
+
+
+@app.post("/api/reading/sheets/{read_id}/submit")
+def submit_read(read_id: str, req: ReadText):
+    _load_read(read_id)
+    if not settings.model_strong:
+        raise HTTPException(500, "MOCK_MODEL_STRONG 환경변수가 설정되지 않았습니다.")
+    return _reading_call(lambda: reading.submit(read_id, req.text, req.timed_out))
+
+
+def _load_read(read_id: str) -> dict:
+    try:
+        return reading.load(read_id)
+    except (FileNotFoundError, ValueError):
+        raise HTTPException(404, "답안을 찾을 수 없습니다.")
+
+
+def _reading_call(fn):
+    try:
+        return fn()
+    except reading.ReadingError as e:
+        raise HTTPException(409, str(e))
+    except LLMError as e:
+        raise HTTPException(502, f"채점 실패 (답안은 저장됨, 다시 제출하세요): {e}")
+
+
+# ---------- C. AI 변경 검토 드릴 (docs/flow_drills_design.md 4절) ----------
+
+class ReviewCreate(BaseModel):
+    bundle_id: str
+    seed: int | None = None
+
+
+class ReviewAnswer(BaseModel):
+    verdict: Literal["ok", "violation"]
+    policy_id: str | None = None
+    line: int | None = None
+
+
+@app.get("/api/review")
+def review_overview():
+    return review.overview()
+
+
+@app.post("/api/review/decks")
+def create_review(req: ReviewCreate):
+    try:
+        rv = review.create(req.bundle_id, req.seed)
+    except (FileNotFoundError, ValueError):
+        raise HTTPException(404, "정책 묶음을 찾을 수 없습니다.")
+    return review.view(rv["review_id"])
+
+
+@app.get("/api/review/decks/{review_id}")
+def get_review(review_id: str):
+    _load_review(review_id)
+    return review.view(review_id)
+
+
+@app.post("/api/review/decks/{review_id}/cards/{n}/answer")
+def answer_review(review_id: str, n: int, req: ReviewAnswer):
+    _load_review(review_id)
+    return _review_call(lambda: review.answer(review_id, n, req.verdict, req.policy_id, req.line))
+
+
+@app.get("/api/review/decks/{review_id}/cards/{n}/result")
+def review_card_result(review_id: str, n: int):
+    _load_review(review_id)
+    return _review_call(lambda: review.card_result(review_id, n))
+
+
+def _load_review(review_id: str) -> dict:
+    try:
+        return review.load(review_id)
+    except (FileNotFoundError, ValueError):
+        raise HTTPException(404, "검토 묶음을 찾을 수 없습니다.")
+
+
+def _review_call(fn):
+    try:
+        return fn()
+    except review.ReviewError as e:
+        raise HTTPException(409, str(e))
+
+
+# ---------- D. 변경 대응 드릴 (docs/flow_drills_design.md 4절) ----------
+
+class ResponseCreate(BaseModel):
+    bundle_id: str
+
+
+class ResponseAnswer(BaseModel):
+    policies: list[str] = []
+    examples: dict[str, str] = {}      # 예시 id → 새 기대값
+    chunks: list[str] = []
+
+
+@app.get("/api/change")
+def change_overview():
+    return change.overview()
+
+
+@app.post("/api/change/responses")
+def create_response(req: ResponseCreate):
+    try:
+        b = policy.load(req.bundle_id)
+    except (FileNotFoundError, ValueError):
+        raise HTTPException(404, "정책 묶음을 찾을 수 없습니다.")
+    if not b.get("changes") and not settings.model_strong:
+        raise HTTPException(500, "MOCK_MODEL_STRONG 환경변수가 설정되지 않았습니다.")
+    try:
+        resp = change.create(req.bundle_id)
+    except change.ChangeError as e:
+        raise HTTPException(502, str(e))
+    except LLMError as e:
+        raise HTTPException(502, str(e))
+    return change.view(resp["response_id"])
+
+
+@app.get("/api/change/responses/{response_id}")
+def get_response(response_id: str):
+    _load_response(response_id)
+    return change.view(response_id)
+
+
+@app.post("/api/change/responses/{response_id}/cards/{n}/answer")
+def answer_response(response_id: str, n: int, req: ResponseAnswer):
+    _load_response(response_id)
+    return _change_call(lambda: change.answer(response_id, n, req.policies, req.examples, req.chunks))
+
+
+@app.get("/api/change/responses/{response_id}/cards/{n}/result")
+def response_card_result(response_id: str, n: int):
+    _load_response(response_id)
+    return _change_call(lambda: change.card_result(response_id, n))
+
+
+def _load_response(response_id: str) -> dict:
+    try:
+        return change.load(response_id)
+    except (FileNotFoundError, ValueError):
+        raise HTTPException(404, "풀이를 찾을 수 없습니다.")
+
+
+def _change_call(fn):
+    try:
+        return fn()
+    except change.ChangeError as e:
+        raise HTTPException(409, str(e))
+
+
 # ---------- 평가 리포트 / 정답 공개 ----------
 
 @app.post("/api/sessions/{session_id}/evaluate")
@@ -411,4 +802,13 @@ def _summary(session: Session, problem: ProblemPublic) -> dict:
     }
 
 
-app.mount("/", StaticFiles(directory=APP_ROOT / "web", html=True), name="web")
+class _NoCacheStatic(StaticFiles):
+    """화면 파일은 매번 서버에 확인시킨다. 헤더가 없으면 Chrome이 수정 전 app.js를 재검증 없이 재사용해
+    새 버튼은 보이는데 눌러도 반응이 없는 일이 생긴다. 바뀌지 않았으면 ETag로 304만 오간다."""
+    async def get_response(self, path, scope):
+        resp = await super().get_response(path, scope)
+        resp.headers["Cache-Control"] = "no-cache"
+        return resp
+
+
+app.mount("/", _NoCacheStatic(directory=APP_ROOT / "web", html=True), name="web")

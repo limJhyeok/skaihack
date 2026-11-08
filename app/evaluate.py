@@ -3,7 +3,7 @@ import json
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
-from . import codectx, llm, metrics, prompts, rehearsal, runner, sessions
+from . import codectx, generator, llm, metrics, prompts, rehearsal, runner, sessions
 from .config import settings
 from .schemas import ConsistencyEval, IntentEval, ReportSummary, Sealed, TechnicalEval
 
@@ -37,6 +37,10 @@ def facts_text(sealed: Sealed, disc: dict) -> str:
     lines = []
     for f in sealed.facts:
         d = disc[f.id]
+        if f.type == "buried":
+            lines.append(f"- [{f.id}|{f.importance}|buried] {f.statement} → README에 명시(근거: \"{f.readme_quote}\"). "
+                         "대화 발견 대상이 아니며 결과물·문서·테스트 반영 여부로 판단")
+            continue
         state = f"발견(질문 #{d['question_no']})" if d["discovered"] else ("부분 언급" if d["partial"] else "미발견")
         lines.append(f"- [{f.id}|{f.importance}|{f.type}] {f.statement} → {state}")
     return "\n".join(lines)
@@ -74,6 +78,21 @@ def commits_text(process: dict) -> str:
 def docs_text(docs: dict, names: list[str] | None = None) -> str:
     keys = names if names is not None else list(docs)
     return "\n\n".join(f"## {k}\n{docs[k]}" for k in keys if k in docs) or "(문서 없음)"
+
+
+def concepts_text(sealed: Sealed) -> str:
+    """기술 평가용 설계 개념 목록. 개념 카드의 간소화 허용선을 함께 준다."""
+    lines = []
+    for c in sealed.concepts:
+        card = generator.CONCEPTS.get(c.id, {})
+        lines.append(f"- [{c.id}|{c.role}] {card.get('name', c.id)} — 연결 사실: {', '.join(c.fact_ids) or '없음'}\n"
+                     f"  순진한 구현의 결함: {c.naive_failure}\n  간소화 허용선: {card.get('simplification', '-')}")
+    return "\n".join(lines) or "(없음)"
+
+
+def policy_targets(sealed: Sealed) -> list[str]:
+    """반영 여부를 판정할 대상: 묻힌 사실 + 핵심·보조 개념."""
+    return [f.id for f in sealed.facts if f.type == "buried"] + [c.id for c in sealed.concepts if c.role in ("core", "light")]
 
 
 # ---------- 항목 정리 ----------
@@ -187,6 +206,7 @@ def evaluate(session_id: str) -> dict:
         "eval_technical", readme=problem.readme_markdown, facts_with_discovery=facts_text(sealed, disc),
         agreed_scope=docs_text(docs, ["SCOPE.md", "ACCEPTANCE.md"]) + "\n\n[채팅 속 범위 제안·합의]\n" + ("\n".join(agreed_turns) or "(없음)"),
         traps="\n".join(f"- {t}" for t in sealed.overengineering_traps), file_tree=ctx.tree_text(),
+        concepts=concepts_text(sealed), policy_targets=", ".join(policy_targets(sealed)) or "(없음)",
         key_files=ctx.key_files_text(), run_result=json.dumps(run_for_llm, ensure_ascii=False, indent=1),
         secret_scan=json.dumps(submission.get("secret_findings", []), ensure_ascii=False))
     intent_prompt = prompts.load(
@@ -247,6 +267,10 @@ def evaluate(session_id: str) -> dict:
                         "mismatches": sum(c.verdict in ("inconsistent", "partially") for c in cons.claims)},
         "timeline": timeline(s, chat, process, events),
     }
+    # 묻힌 사실·개념 반영 판정은 어떤 사실이 함정이었는지 드러내므로 공개 화면에서만 쓴다 (report.json에 넣지 않음).
+    targets = set(policy_targets(sealed))
+    checks = [c.model_dump() for c in tech.policy_checks if c.ref in targets]
+    (d / "policy_checks.json").write_text(json.dumps(checks, ensure_ascii=False, indent=2), encoding="utf-8")
     (d / "report.json").write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
     if s.status == "rehearsed":
         s.status = "evaluated"

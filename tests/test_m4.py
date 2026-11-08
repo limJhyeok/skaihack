@@ -20,11 +20,11 @@ def mk_q(i, type_, question, cat="behavior_risk"):
                                                       impact=step("500 에러"), plan=step("타임아웃 테스트")))
 
 
-GOOD = [mk_q(1, "design_reason", "create_memo에서 summarize를 저장 전에 호출한 이유는?", "decision_rationale"),
-        mk_q(2, "failure_response", "summarize 호출이 30초 걸리면 /memos는 어떻게 되나요?"),
-        mk_q(3, "risk_prediction", "search 엔드포인트에서 가장 먼저 깨질 곳은?"),
-        mk_q(4, "data_flow", "POST /memos 요청이 main.py에서 처리되는 순서는?", "structure"),
-        mk_q(5, "requirement_mapping", "get_db는 언제 테이블을 만드나요?", "structure")]
+GOOD = [mk_q(1, "design_reason", "메모를 저장하기 전에 요약을 먼저 받아 오도록 설계한 이유와 그 대가는?", "decision_rationale"),
+        mk_q(2, "failure_response", "외부 요약 서비스가 30초씩 지연되면 메모 생성 요청은 어떻게 되고, 어떻게 대응하겠나요?"),
+        mk_q(3, "risk_prediction", "메모가 수만 건으로 늘면 검색 기능에서 가장 먼저 깨질 곳은?"),
+        mk_q(4, "architecture", "메모 생성 요청이 들어와 저장되기까지 각 구성요소가 맡은 책임은?", "structure"),
+        mk_q(5, "requirement_mapping", "README가 약속한 기능 중 구현에서 빠지거나 다르게 동작하는 것은?", "structure")]
 
 
 # ---------- 규칙 ----------
@@ -55,11 +55,26 @@ def test_validate_questions():
     ctx = codectx.build(SAMPLE)
     assert {"summarize", "create_memo", "main.py", "/memos"} <= ctx.identifiers()
     assert rehearsal.validate(GOOD, 5, ctx) == []
-    bad = [mk_q(1, "risk_prediction", "일반적으로 API 서버에서 가장 먼저 깨지는 곳은?")]
+    bad = [mk_q(1, "risk_prediction", "main.py의 create_memo()에서 summarize를 먼저 부르면 무엇이 깨지나요?")]
     bad[0].model_answer.plan.evidence = ["없음"]
     errs = " | ".join(rehearsal.validate(bad, 5, ctx))
-    for needle in ["문항 수", "design_reason", "failure_response", "실제 파일명", "plan"]:
+    for needle in ["문항 수", "design_reason", "failure_response", "코드 식별자", "create_memo", "main.py", "summarize", "plan"]:
         assert needle in errs
+
+
+def test_leaked_identifiers_token_boundary():
+    names = {"summarize", "main", "/memos"}
+    assert rehearsal.leaked_identifiers("summarize를 호출하면", names) == ["summarize"]
+    assert rehearsal.leaked_identifiers("POST /memos 요청", names) == ["/memos"]
+    assert rehearsal.leaked_identifiers("summarized 결과와 domain 모델", names) == []
+
+
+def test_doc_file_names_allowed_in_questions(tmp_path):
+    (tmp_path / "README.md").write_text("# memo\n")
+    (tmp_path / "main.py").write_text("def summarize(x):\n    return x\n")
+    ctx = codectx.build(tmp_path)
+    q = mk_q(1, "requirement_mapping", "README에 적힌 요구사항 중 빠진 것은?")
+    assert not any("식별자" in e for e in rehearsal.validate([q], 1, ctx))
 
 
 def test_codectx_line_numbers_and_excerpt():

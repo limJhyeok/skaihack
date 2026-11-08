@@ -3,7 +3,9 @@ from typing import Literal
 
 from pydantic import BaseModel
 
-FactType = Literal["ask_to_reveal", "conflict", "confirm_only", "constraint", "detail"]
+FactType = Literal["ask_to_reveal", "conflict", "confirm_only", "constraint", "detail", "buried"]
+ConceptRole = Literal["core", "light", "qa_only"]
+ConceptPlacementKind = Literal["readme", "fact", "data"]
 Importance = Literal["critical", "major", "minor"]
 Difficulty = Literal["easy", "standard", "hard"]
 
@@ -32,6 +34,19 @@ class Fact(BaseModel):
     importance: Importance
     reveal_when: str
     example_question: str
+    # buried(README에 묻힌 사실)만: README 원문에서 그대로 옮긴 근거 문장. 그 외 유형은 null.
+    readme_quote: str | None = None
+
+
+class ConceptUse(BaseModel):
+    """출제 LLM이 설계 개념을 실제로 어디에 심었는지 (docs/flow_drills_design.md 5.3)."""
+    id: str
+    role: ConceptRole
+    placements: list[ConceptPlacementKind]
+    fact_ids: list[str]
+    naive_failure: str      # 이 문항에서 순진하게 구현하면 생기는 결함 (weak_point·impact 씨앗)
+    plan: str               # 개선안 (plan 씨앗)
+    qa_seeds: list[str]     # 서술형 질문 씨앗
 
 
 class Sealed(BaseModel):
@@ -42,20 +57,30 @@ class Sealed(BaseModel):
     good_solution_criteria: list[str]
     overengineering_traps: list[str]
     data_file_notes: str
+    # 출제 설정 (공개 전 숨김). 이전 세션에는 없어서 기본값을 둔다.
+    ai_fit: str = ""
+    tech_requirement: str | None = None
+    themes: list[str] = []
+    concepts: list[ConceptUse] = []
 
 
 class GeneratedProblem(BaseModel):
-    """출제 LLM 출력. 공개분과 봉인분으로 나눠 저장한다."""
+    """출제 LLM 출력. 공개분과 봉인분으로 나눠 저장한다.
+
+    필드 순서 = 생성 순서. 설계(숨은 사실·채점 기준·개념)를 먼저 확정하고 본문(README·데이터)을
+    그에 맞춰 쓰게 하려고 봉인분을 앞에 둔다. 순서를 바꾸면 출제 품질이 달라진다.
+    """
     title: str
-    readme_markdown: str
-    data_files: list[DataFile]
-    persona_public: PersonaPublic
-    persona_private: PersonaPrivate
     facts: list[Fact]
+    persona_private: PersonaPrivate
     priority_confusion: list[str]
     good_solution_criteria: list[str]
     overengineering_traps: list[str]
+    concepts: list[ConceptUse]
     data_file_notes: str
+    readme_markdown: str
+    data_files: list[DataFile]
+    persona_public: PersonaPublic
 
 
 class ProblemPublic(BaseModel):
@@ -98,7 +123,7 @@ class DisclosureJudgment(BaseModel):
 
 # ---------- 설명 리허설 (5.8, 6.4, 6.5) ----------
 
-RehearsalType = Literal["design_reason", "failure_response", "risk_prediction", "requirement_mapping",
+RehearsalType = Literal["architecture", "design_reason", "failure_response", "risk_prediction", "requirement_mapping",
                         "data_flow", "ai_decision", "experiment_reasoning"]
 CognitiveCategory = Literal["behavior_risk", "structure", "decision_rationale"]
 StepVerdict = Literal["met", "partial", "missed"]
@@ -137,6 +162,57 @@ class GradeOutput(BaseModel):
     comment: str
 
 
+# ---------- 추적 카드 드릴 (docs/drill_design.md) ----------
+
+class CardSlot(BaseModel):
+    id: str                                  # "s1"…
+    prompt: str
+    kind: Literal["choice", "value"]
+    options: list[str]                       # choice일 때 2~4개, value면 빈 배열
+    claimed: str                             # 출제자가 예상한 정답 (실행 관찰값과 대조)
+
+
+class GeneratedCard(BaseModel):
+    id: str
+    context: str                             # 기능 흐름 안내 (사용자 행동 → 결과, 용어 풀이). 정답을 정하는 처리는 쓰지 않음
+    scenario: str
+    slots: list[CardSlot]
+    evidence: list[str]                      # "파일:줄"
+    explanation: str
+    defect_tags: list[str]
+    probe: str
+
+
+class GeneratedDeck(BaseModel):
+    cards: list[GeneratedCard]
+
+
+class RepoFile(BaseModel):
+    path: str
+    content: str
+
+
+class PlantedDefect(BaseModel):
+    tag: str                                 # 결함 카탈로그 ID
+    location: str                            # "파일:줄" 또는 "파일:시작-끝"
+    behavior: str                            # 그 결함 때문에 실제로 일어나는 일 (사용자 쪽 사건)
+
+
+class FreshRepo(BaseModel):
+    """새 문제 드릴용 저장소 (docs/drill_design.md §6). 결함 사양은 저장소 밖(덱 출제 입력)에만 둔다."""
+    title: str
+    files: list[RepoFile]
+    planted: list[PlantedDefect]
+    bait: PlantedDefect                      # 위험해 보이지만 실제로는 안전한 코드 (tag는 "BAIT")
+
+
+class CardRepair(BaseModel):
+    action: Literal["fix_probe", "accept_observed", "drop"]
+    probe: str | None
+    explanation: str | None
+    reason: str
+
+
 # ---------- 평가 리포트 (5.9, 6.6, 6.7, 6.7-1, 6.8) ----------
 
 Verdict = Literal["충족", "부분충족", "미충족"]
@@ -151,8 +227,17 @@ class EvalItem(BaseModel):
     suggestion: str
 
 
+class PolicyCheck(BaseModel):
+    """묻힌 사실·설계 개념이 결과물·문서·테스트에 반영됐는지 (공개 화면에서만 보여 줌)."""
+    ref: str                # 사실 id(F..) 또는 개념 id
+    verdict: Literal["반영", "부분 반영", "미반영"]
+    evidence: list[str]
+    note: str
+
+
 class TechnicalEval(BaseModel):
     items: list[EvalItem]
+    policy_checks: list[PolicyCheck]
     undiscovered_note: str
     strengths: list[str]
     improvements: list[str]
@@ -201,3 +286,111 @@ class MissedFactAnalysis(BaseModel):
 
 class RevealMissed(BaseModel):
     items: list[MissedFactAnalysis]
+
+
+# ---------- 정책 묶음 (docs/flow_drills_design.md 3절) ----------
+
+ValueType = Literal["int", "number", "str", "bool", "date", "time", "datetime", "choice", "list"]
+
+
+class FuncParam(BaseModel):
+    name: str                                # 파이썬 인자 이름
+    label: str                               # 화면에 보이는 한국어 이름
+    type: ValueType
+    options: list[str]                       # choice일 때만, 아니면 빈 배열
+
+
+class FuncReturn(BaseModel):
+    label: str
+    type: ValueType
+    options: list[str]
+
+
+class PolicyFunction(BaseModel):
+    name: str
+    summary: str                             # 무엇을 계산하는지만. 규칙 자체는 쓰지 않음
+    params: list[FuncParam]
+    returns: FuncReturn
+
+
+class ArgValue(BaseModel):
+    name: str
+    value: str
+
+
+class PolicyExample(BaseModel):
+    func: str
+    args: list[ArgValue]
+    expected: str
+    note: str                                # 이 예시가 확인하는 경계
+
+
+class PolicyItem(BaseModel):
+    id: str                                  # P1…
+    title: str
+    statement: str                           # 원자 단위 규칙 (출제자 말로 정확히)
+    location: str                            # 문서 속 위치 (섹션·표·부록·단서 조항)
+    doc_quote: str                           # 명세 문서 원문 그대로
+    kind: Literal["general", "counterintuitive", "constraint", "conflict"]
+    examples: list[PolicyExample]
+
+
+class CodeEdit(BaseModel):
+    find: str                                # 정답 구현에서 정확히 한 번 나오는 문자열
+    replace: str
+
+
+class PolicyDefect(BaseModel):
+    id: str                                  # D1…
+    policy_id: str
+    summary: str                             # 순진한 구현이 무엇을 잘못하나 (업무 쪽 사건)
+    edits: list[CodeEdit]
+
+
+class PolicyBundleOut(BaseModel):
+    title: str
+    spec_doc: str
+    functions: list[PolicyFunction]
+    policies: list[PolicyItem]
+    reference_code: str
+    defects: list[PolicyDefect]
+
+
+# ---------- D. 변경 대응 드릴: 정책 변경 출제 (docs/flow_drills_design.md 4절) ----------
+
+class ChangedStatement(BaseModel):
+    policy_id: str
+    statement: str                           # 바뀐 뒤 규칙
+
+
+class PolicyChangeItem(BaseModel):
+    id: str                                  # C1…
+    title: str                               # 공지 제목
+    notice: str                              # 현업이 보낸 변경 공지 (업무 말)
+    changed_policies: list[ChangedStatement]
+    edits: list[CodeEdit]                    # 정답 구현을 새 정책에 맞게 고치는 치환
+
+
+class PolicyChangesOut(BaseModel):
+    changes: list[PolicyChangeItem]
+
+
+# ---------- A. 읽기·정리 드릴 채점 (docs/flow_drills_design.md 4절) ----------
+
+class ReadingPolicyJudge(BaseModel):
+    policy_id: str
+    verdict: Literal["covered", "partial", "misread", "missed"]
+    items: list[int]                         # 이 정책에 해당하는 응시자 항목 번호
+    comment: str                             # 무엇이 빠졌거나 어긋났나 (covered면 빈 문자열 가능)
+
+
+class ReadingItemJudge(BaseModel):
+    n: int
+    verdict: Literal["matched", "extra", "unsupported", "contradicts"]
+    comment: str
+
+
+class ReadingGradeOut(BaseModel):
+    policies: list[ReadingPolicyJudge]
+    items: list[ReadingItemJudge]
+    overall: str                             # 읽기 습관에 대한 한두 문장 피드백

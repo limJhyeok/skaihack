@@ -4,16 +4,21 @@
 <meta charset="utf-8">
 <title>mockdrill — AI 실무 과제 모의고사</title>
 <link rel="stylesheet" href="style.css">
+<script>
+// 테마: 기본 light, 사용자가 고른 값은 localStorage에 저장. 첫 페인트 전에 적용해 깜빡임 방지.
+if (localStorage.getItem("mockdrill-theme") === "dark") document.documentElement.dataset.theme = "dark";
+</script>
 </head>
 <body>
 <header class="topbar">
-  <strong>mockdrill</strong>
+  <button id="brand" class="brand" title="홈으로">mockdrill</button>
   <span id="top-title" class="muted">AI 실무 과제 모의고사</span>
   <span class="spacer"></span>
   <span id="top-qcount" class="hidden"></span>
   <span id="top-timer" class="timer hidden"></span>
   <button id="btn-pause" class="hidden">일시정지</button>
   <button id="btn-submit-open" class="primary hidden">제출하고 리허설 시작</button>
+  <button id="btn-theme" class="ghost theme-toggle" title="라이트/다크 모드 전환"></button>
   <button id="btn-settings" class="ghost">설정</button>
 </header>
 <div id="toasts"></div>
@@ -23,6 +28,11 @@
     <div class="cards">
       <button id="btn-new" class="card primary">새 모의고사<small>과제 출제 → 응시 → 리허설 → 리포트</small></button>
       <button id="btn-standalone" class="card">설명 리허설만 하기<small>임의의 로컬 저장소로 이해도 확인 문제</small></button>
+      <button id="btn-drill" class="card">동작 추적 드릴<small>상황 하나 → 코드가 실제로 어떻게 동작하나 30~90초 예측 → 실행 결과와 즉시 대조</small></button>
+      <button id="btn-reading" class="card">읽기·정리 드릴<small>긴 명세 문서를 읽고 요구사항 목록 작성 → 숨은 정책 목록과 대조해 누락·잘못 해석·지어낸 것 판정</small></button>
+      <button id="btn-criteria" class="card">성공 기준 드릴<small>긴 명세 문서의 정책을 확인 예시(입력 → 기대 출력)로 → 정답 구현·결함 버전에 실행해 채점</small></button>
+      <button id="btn-review" class="card">AI 변경 검토 드릴<small>에이전트가 방금 짠 코드 + 관련 요구사항 → 위반 여부·어긴 정책·줄을 장당 2~3분에 판정 → 즉시 채점</small></button>
+      <button id="btn-change" class="card">변경 대응 드릴<small>시험 중간의 정책 변경 공지 → 고칠 요구사항·성공 기준 예시(새 기대값)·코드 위치 고르기 → 실행 결과와 대조</small></button>
       <button id="btn-dashboard" class="card">기록 대시보드<small>지난 세션 점수 추이와 자주 놓치는 사실 유형</small></button>
     </div>
     <h2>세션</h2>
@@ -222,6 +232,234 @@
     <p id="retro-status" class="muted"></p>
   </section>
 
+  <section id="drill-setup" class="view narrow hidden">
+    <h1>동작 추적 드릴</h1>
+    <p class="muted">카드마다 상황 하나가 주어지고, 그때 서버 코드가 실제로 내는 결과(상태 코드·응답 값·저장 상태·외부 호출 횟수 등)를 고릅니다. 정답은 상황을 주입해 <b>코드를 실제로 실행한 관찰값</b>입니다.</p>
+    <h2>새 문제</h2>
+    <p class="muted">처음 보는 작은 업무 시스템 저장소(FastAPI)를 만들고, 거기에 심은 결함·미끼로 카드를 출제합니다. 내가 최근 자주 틀린 결함 패턴이 더 자주 나옵니다. 만든 뒤 <b>저장소를 에디터로 15분 읽고</b> 코드 닫고 모드로 푸세요.</p>
+    <div class="row"><button id="btn-fresh" class="primary">새 문제 만들기 (보통 4~8분)</button></div>
+    <p id="drill-fresh-status" class="muted"></p>
+    <h2>카드 재료</h2>
+    <table class="list"><thead><tr><th>재료</th><th>실행 검증</th><th>카드</th><th></th></tr></thead><tbody id="drill-sources"></tbody></table>
+    <p id="drill-gen-status" class="muted"></p>
+    <h2>드릴 시작</h2>
+    <form id="form-run">
+      <label>재료 <select name="session_id"><option value="">전체 (안 푼 카드 → 마지막에 틀린 카드 순)</option></select></label>
+      <fieldset class="modes">
+        <legend>모드</legend>
+        <label><input type="radio" name="mode" value="closed" checked> 코드 닫고 (카드당 90초, 실전 Q&amp;A 조건)</label>
+        <label><input type="radio" name="mode" value="open"> 코드 보고 (카드당 180초, 근거 파일 전체를 보며 직접 추적)</label>
+      </fieldset>
+      <label>카드 수 <input name="count" type="number" min="1" max="30" value="10"></label>
+      <div class="row">
+        <button type="button" class="ghost" data-go="home">홈으로</button>
+        <button type="submit" class="primary">드릴 시작</button>
+      </div>
+    </form>
+    <p id="drill-run-status" class="muted"></p>
+    <h2>지난 드릴</h2>
+    <table class="list"><thead><tr><th>ID</th><th>모드</th><th>진행</th><th>카드 정답률</th><th>칸 정답률</th><th></th></tr></thead><tbody id="drill-runs"></tbody></table>
+  </section>
+
+  <section id="drill-card" class="view wide hidden">
+    <div class="rh-head"><h1 id="dc-progress"></h1><span id="dc-timer" class="timer"></span></div>
+    <div id="dc-layout" class="card-layout">
+      <div id="dc-code" class="hidden"></div>
+      <div>
+        <p id="dc-source" class="muted"></p>
+        <p id="dc-context" class="context"></p>
+        <p id="dc-scenario" class="rh-question"></p>
+        <form id="form-card"></form>
+        <p id="dc-status" class="muted"></p>
+        <div id="dc-result"></div>
+      </div>
+    </div>
+  </section>
+
+  <section id="drill-summary" class="view narrow hidden">
+    <h1>드릴 요약</h1>
+    <div id="ds-body"></div>
+    <div class="row">
+      <button class="ghost" data-go="home">홈으로</button>
+      <button id="btn-ds-setup" class="primary">드릴 화면으로</button>
+    </div>
+  </section>
+
+  <section id="crit-setup" class="view narrow hidden">
+    <h1>성공 기준 드릴</h1>
+    <p class="muted">명세 문서와 함수 모양(입력·출력)만 보고, 정책을 확인할 <b>예시</b>를 적습니다. 예: 출근 5/13 22:00 · 퇴근 5/14 07:00 → 업무 기준일 5/13. 제출하면 예시를 <b>정답 구현</b>에 넣어 기대값이 맞는지(정책 이해 정확도), <b>정책을 하나씩 어긴 결함 버전</b>을 몇 개 잡는지(경계 사례 검출률)를 실행으로 채점합니다.</p>
+    <h2>정책 묶음</h2>
+    <p class="muted">명세 문서(A4 3~4장)·정책 목록·정답 구현·결함 버전을 한 번에 만들고, 정책 예시를 실제로 돌려 검증합니다. 같은 묶음은 나중에 다른 드릴(읽기·정리, AI 변경 검토)에도 씁니다.</p>
+    <div class="row"><button id="btn-bundle" class="primary">새 정책 묶음 만들기 (보통 2~5분)</button></div>
+    <p id="crit-bundle-status" class="muted"></p>
+    <label>제한 시간 <select id="crit-seconds">
+      <option value="1200">20분</option><option value="900">15분</option><option value="0">제한 없음</option>
+    </select></label>
+    <table class="list"><thead><tr><th>문서</th><th>정책·결함</th><th>푼 횟수</th><th>최고 검출률</th><th></th></tr></thead><tbody id="crit-bundles"></tbody></table>
+    <p id="crit-start-status" class="muted"></p>
+    <h2>지난 답안</h2>
+    <table class="list"><thead><tr><th>ID</th><th>문서</th><th>예시</th><th>정확도</th><th>검출률</th><th></th></tr></thead><tbody id="crit-sheets"></tbody></table>
+    <div class="row"><button type="button" class="ghost" data-go="home">홈으로</button></div>
+  </section>
+
+  <section id="crit-sheet" class="view full hidden">
+    <div class="rh-head"><h1 id="cs-title"></h1><span id="cs-timer" class="timer"></span></div>
+    <div class="crit-layout">
+      <div id="cs-doc" class="readme crit-doc"></div>
+      <div>
+        <p class="muted">함수마다 입력을 채우고 기대 출력을 적어 예시를 추가하세요. 경계(자정·기준 시각 직전/직후, 정원과 같을 때, 개정일 당일, 끝=시작, 동점)를 노리세요. 메모는 채점하지 않습니다.</p>
+        <div id="cs-funcs"></div>
+        <h2>내 예시 <span id="cs-count" class="muted"></span></h2>
+        <table class="list"><thead><tr><th>#</th><th>함수</th><th>입력</th><th>기대 출력</th><th>메모</th><th></th></tr></thead><tbody id="cs-rows"></tbody></table>
+        <p id="cs-status" class="muted"></p>
+        <div class="row">
+          <button id="btn-cs-leave" class="ghost">나가기 (저장됨)</button>
+          <button id="btn-cs-submit" class="primary">제출하고 채점</button>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section id="read-setup" class="view narrow hidden">
+    <h1>읽기·정리 드릴</h1>
+    <p class="muted">명세 문서를 읽고 구현에 필요한 <b>요구사항 목록</b>을 자기 말로 적습니다. 제출하면 문서에서 뽑아 둔 정책 목록(응시자에게는 숨김)과 대조해 정책마다 반영 / 부분 반영 / 잘못 해석 / 누락을, 내 항목마다 문서에 근거가 있는지를 판정합니다 (LLM 채점). 결과는 놓친 정책과 문서 속 위치, 놓치면 생기는 일입니다.</p>
+    <p class="muted">같은 정책 묶음으로 성공 기준 드릴을 먼저 풀었다면 정책 목록을 이미 본 것입니다. 이 드릴은 <b>처음 보는 묶음</b>으로 하세요 (표에 "이미 봄"으로 표시).</p>
+    <div class="row"><button id="btn-read-bundle" class="primary">새 정책 묶음 만들기 (보통 2~5분)</button></div>
+    <p id="read-bundle-status" class="muted"></p>
+    <label>제한 시간 <select id="read-seconds">
+      <option value="1500">25분</option><option value="1200">20분</option><option value="1800">30분</option><option value="0">제한 없음</option>
+    </select></label>
+    <table class="list"><thead><tr><th>문서</th><th>정책</th><th>푼 횟수</th><th>최고 포착률</th><th></th></tr></thead><tbody id="read-bundles"></tbody></table>
+    <p id="read-start-status" class="muted"></p>
+    <h2>지난 답안</h2>
+    <table class="list"><thead><tr><th>ID</th><th>문서</th><th>항목</th><th>포착률</th><th>잘못 해석</th><th>근거 없음</th><th></th></tr></thead><tbody id="read-sheets"></tbody></table>
+    <div class="row"><button type="button" class="ghost" data-go="home">홈으로</button></div>
+  </section>
+
+  <section id="read-sheet" class="view full hidden">
+    <div class="rh-head"><h1 id="rs-title"></h1><span class="row"><span id="rs-timer" class="timer"></span><button id="btn-rs-pause" class="ghost">일시정지</button></span></div>
+    <div class="crit-layout">
+      <div id="rs-doc" class="readme crit-doc"></div>
+      <div>
+        <p class="muted">한 줄에 요구사항 하나. <code>#</code>으로 시작하는 줄은 묶음 제목입니다 (예: <code># 날짜 기준</code>). 글머리표(<code>-</code>, <code>1.</code>)는 있어도 됩니다. 경계 수치·예외·단서·우선순위까지 옮기세요. 문서에 없는 것은 "질문:"으로 적으면 감점하지 않습니다.</p>
+        <textarea id="rs-text" class="read-text" spellcheck="false" placeholder="# 날짜 기준&#10;- 업무일은 실제 출발일이 아니라 …&#10;- 단, 04:00 정각은 …"></textarea>
+        <p><span id="rs-count" class="muted"></span> <span id="rs-status" class="muted"></span></p>
+        <div class="row">
+          <button id="btn-rs-leave" class="ghost">나가기 (저장됨)</button>
+          <button id="btn-rs-submit" class="primary">제출하고 채점</button>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section id="read-result" class="view wide hidden">
+    <h1 id="rr-title"></h1>
+    <div id="rr-body"></div>
+    <div class="row">
+      <button class="ghost" data-go="home">홈으로</button>
+      <button id="btn-rr-retry" class="ghost">같은 문서 다시 풀기</button>
+      <button id="btn-rr-setup" class="primary">드릴 화면으로</button>
+    </div>
+  </section>
+
+  <section id="rev-setup" class="view narrow hidden">
+    <h1>AI 변경 검토 드릴</h1>
+    <p class="muted">"에이전트가 방금 작성한 코드"와 그 코드에 걸린 요구사항을 보고, 요구사항을 어겼는지 판정합니다. 어겼다면 어긴 요구사항과 줄을 고릅니다. 카드는 정책 묶음의 정답 구현 또는 결함 버전에서 나오며, 한 묶음에서 같은 함수는 한 번만 나옵니다. 정답은 미리 정해져 있어 바로 채점합니다 (LLM 없음).</p>
+    <p class="muted">같은 정책 묶음으로 성공 기준 드릴(B)이나 읽기 드릴(A)을 끝냈다면 결과 화면에서 결함 요약을 이미 본 것입니다. "푼 드릴" 칸을 보고 고르세요.</p>
+    <div class="row"><button id="btn-rev-bundle" class="primary">새 정책 묶음 만들기 (보통 2~5분)</button></div>
+    <p id="rev-bundle-status" class="muted"></p>
+    <table class="list"><thead><tr><th>문서</th><th>결함</th><th>검토한 결함</th><th>푼 드릴</th><th></th></tr></thead><tbody id="rev-bundles"></tbody></table>
+    <p id="rev-start-status" class="muted"></p>
+    <h2>지난 검토</h2>
+    <table class="list"><thead><tr><th>ID</th><th>문서</th><th>카드</th><th>모두 맞음</th><th>결함 발견</th><th>오경보</th><th></th></tr></thead><tbody id="rev-decks"></tbody></table>
+    <div class="row"><button type="button" class="ghost" data-go="home">홈으로</button></div>
+  </section>
+
+  <section id="rev-card" class="view wide hidden">
+    <div class="rh-head"><h1 id="rv-progress"></h1><span id="rv-timer" class="timer"></span></div>
+    <p id="rv-agent" class="context"></p>
+    <div id="rv-ask" class="crit-layout">
+      <div>
+        <p class="muted">위반이라고 보면 문제가 되는 줄을 클릭하세요.</p>
+        <div id="rv-code"></div>
+      </div>
+      <div>
+        <h2>관련 요구사항</h2>
+        <div id="rv-policies"></div>
+        <div class="slot">
+          <label><input type="radio" name="rv-verdict" value="ok"> 요구사항 위반 없음 (받아들임)</label>
+          <label><input type="radio" name="rv-verdict" value="violation"> 위반 있음 → 위에서 요구사항, 왼쪽에서 줄 선택</label>
+          <p id="rv-pick" class="muted"></p>
+        </div>
+        <div class="row"><button id="btn-rv-submit" class="primary">제출</button></div>
+        <p id="rv-status" class="muted"></p>
+        <details><summary>명세 문서</summary><div id="rv-doc" class="readme"></div></details>
+      </div>
+    </div>
+    <div id="rv-result"></div>
+  </section>
+
+  <section id="rev-summary" class="view wide hidden">
+    <h1 id="rvs-title"></h1>
+    <div id="rvs-body"></div>
+    <div class="row">
+      <button class="ghost" data-go="home">홈으로</button>
+      <button id="btn-rev-setup" class="primary">드릴 화면으로</button>
+    </div>
+  </section>
+
+  <section id="chg-setup" class="view narrow hidden">
+    <h1>변경 대응 드릴</h1>
+    <p class="muted">시험 중간에 현업이 보낸 정책 변경 공지를 받습니다. 지금까지 쌓은 요구사항(정책 목록), 성공 기준 예시, 코드 가운데 <b>고쳐야 하는 것</b>을 고르고, 값이 바뀌는 예시에는 새 기대값을 적습니다. 정답은 변경을 정답 구현에 적용해 모든 예시를 실제로 실행한 결과입니다 (LLM 채점 없음).</p>
+    <p class="muted">변경 공지는 묶음마다 처음 시작할 때 한 번 출제합니다 (보통 1~3분). 정책 목록·예시·코드를 모두 보여 주므로, 이 드릴을 한 묶음은 다른 드릴에서 "이미 봄"으로 표시됩니다.</p>
+    <div class="row"><button id="btn-chg-bundle" class="primary">새 정책 묶음 만들기 (보통 2~5분)</button></div>
+    <p id="chg-bundle-status" class="muted"></p>
+    <table class="list"><thead><tr><th>문서</th><th>변경 공지</th><th>푼 횟수</th><th>푼 드릴</th><th></th></tr></thead><tbody id="chg-bundles"></tbody></table>
+    <p id="chg-start-status" class="muted"></p>
+    <h2>지난 풀이</h2>
+    <table class="list"><thead><tr><th>ID</th><th>문서</th><th>카드</th><th>모두 맞음</th><th>요구사항</th><th>예시</th><th>코드</th><th></th></tr></thead><tbody id="chg-resps"></tbody></table>
+    <div class="row"><button type="button" class="ghost" data-go="home">홈으로</button></div>
+  </section>
+
+  <section id="chg-card" class="view wide hidden">
+    <div class="rh-head"><h1 id="cg-progress"></h1><span id="cg-timer" class="timer"></span></div>
+    <div id="cg-notice" class="rh-question"></div>
+    <div id="cg-ask">
+      <h2>1. 고칠 요구사항</h2>
+      <p class="muted">문구나 기대 동작이 바뀌는 요구사항을 모두 고르세요.</p>
+      <div id="cg-policies"></div>
+      <h2>2. 다시 볼 성공 기준 예시</h2>
+      <p class="muted">기대값이 바뀌는 예시를 고르고 새 기대값을 적으세요. 그대로인 예시는 고르지 않습니다.</p>
+      <table class="list"><thead><tr><th></th><th>정책</th><th>입력</th><th>지금 기대값</th><th>새 기대값</th></tr></thead><tbody id="cg-examples"></tbody></table>
+      <h2>3. 고칠 코드 위치</h2>
+      <div id="cg-chunks"></div>
+      <details><summary>지금 코드 전체</summary><div id="cg-code"></div></details>
+      <div class="row"><button id="btn-cg-submit" class="primary">제출</button></div>
+      <p id="cg-status" class="muted"></p>
+      <details><summary>명세 문서 (변경 전)</summary><div id="cg-doc" class="readme"></div></details>
+    </div>
+    <div id="cg-result"></div>
+  </section>
+
+  <section id="chg-summary" class="view wide hidden">
+    <h1 id="cgs-title"></h1>
+    <div id="cgs-body"></div>
+    <div class="row">
+      <button class="ghost" data-go="home">홈으로</button>
+      <button id="btn-chg-setup" class="primary">드릴 화면으로</button>
+    </div>
+  </section>
+
+
+  <section id="crit-result" class="view wide hidden">
+    <h1 id="cr-title"></h1>
+    <div id="cr-body"></div>
+    <div class="row">
+      <button class="ghost" data-go="home">홈으로</button>
+      <button id="btn-cr-setup" class="primary">드릴 화면으로</button>
+    </div>
+  </section>
+
   <section id="settings" class="view narrow hidden">
     <h1>설정</h1>
     <p class="muted">코딩 에이전트 세션 로그 위치. 버전에 따라 다르면 직접 지정하세요. 비우면 기본값.</p>
@@ -237,5 +475,17 @@
   </section>
 </main>
 <script src="app.js"></script>
+<script>
+(() => {
+  const btn = document.getElementById("btn-theme"), root = document.documentElement;
+  const paint = () => { btn.textContent = root.dataset.theme === "dark" ? "☀ 라이트" : "☾ 다크"; };
+  btn.addEventListener("click", () => {
+    if (root.dataset.theme === "dark") { delete root.dataset.theme; localStorage.setItem("mockdrill-theme", "light"); }
+    else { root.dataset.theme = "dark"; localStorage.setItem("mockdrill-theme", "dark"); }
+    paint();
+  });
+  paint();
+})();
+</script>
 </body>
 </html>

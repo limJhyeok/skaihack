@@ -60,6 +60,25 @@ def used_domains() -> set[str]:
     return out
 
 
+def recent_archetypes() -> list[str]:
+    """최근 세션의 과제 유형, 최신순 (세션 ID가 생성 시각 순)."""
+    files = sorted(sessions_dir().glob("*/problem_public.json"), key=lambda f: f.parent.name, reverse=True)
+    return [json.loads(f.read_text(encoding="utf-8"))["archetype"] for f in files]
+
+
+def recent_core_concepts(limit: int = 5) -> list[str]:
+    """최근 세션의 핵심 설계 개념 id, 최신순. 봉인 정보라 출제 선택에만 쓰고 응답에 넣지 않는다."""
+    dirs = sorted((f.parent for f in sessions_dir().glob("*/problem_public.json")), key=lambda d: d.name, reverse=True)
+    out: list[str] = []
+    for d in dirs[:limit]:
+        try:
+            sealed = load_sealed(d.name)
+        except Exception:  # 키가 바뀌었거나 옛 세션: 건너뜀
+            continue
+        out += [c.id for c in sealed.concepts if c.role == "core"]
+    return out
+
+
 # ---------- JSONL 기록 (chat.jsonl, helper_chat.jsonl, events.jsonl) ----------
 
 def now_iso() -> str:
